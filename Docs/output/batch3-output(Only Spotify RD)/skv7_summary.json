@@ -1,0 +1,18 @@
+{
+ "rows": 3149,
+ "catalogue": 2762,
+ "missing": 688,
+ "sibling": 168,
+ "recovered": 856,
+ "recovered_mrm": 592442.21,
+ "k6_only": 372,
+ "spotify_only": 7,
+ "usage_only": 8,
+ "skv6_rows": 2278,
+ "D": 3323794.31,
+ "E": 7889496.76,
+ "FY": 3323794.31,
+ "mrm_lines": 10960,
+ "mrm_isrcs": 1759,
+ "last_col": 225
+}
