@@ -1,0 +1,77 @@
+# Royalty Reports - database, one-shot bootstrap (migrations + first client), API, background worker and web.
+#   docker compose up -d --build        then open http://localhost:8080
+name: mrm
+
+x-backend-env: &backend-env
+  DATABASE_URL: postgresql://mrm_app:${MRM_APP_PASSWORD:-mrm-app-dev}@db:5432/mrm
+  MIGRATOR_DATABASE_URL: postgresql://mrm_owner:${MRM_OWNER_PASSWORD:-mrm-owner-dev}@db:5432/mrm
+  SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+  STORAGE_ROOT: /data/objects
+  ALLOW_SIGNUP: ${ALLOW_SIGNUP:-true}
+  COOKIE_SECURE: ${COOKIE_SECURE:-auto}
+  LEGACY_COMPARISON: ${LEGACY_COMPARISON:-false}
+  LOG_LEVEL: INFO
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: mrm
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres-dev}
+      MRM_OWNER_PASSWORD: ${MRM_OWNER_PASSWORD:-mrm-owner-dev}
+      MRM_APP_PASSWORD: ${MRM_APP_PASSWORD:-mrm-app-dev}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./deploy/postgres/init.sh:/docker-entrypoint-initdb.d/10-init.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d mrm"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  bootstrap:
+    build: ./backend
+    command: ["python", "-m", "mrm.cli", "bootstrap"]
+    environment: *backend-env
+    volumes:
+      - objects:/data/objects
+    depends_on:
+      db: { condition: service_healthy }
+    restart: "no"
+
+  api:
+    build: ./backend
+    environment:
+      <<: *backend-env
+      RD_WORKER: "off"                        # processing runs in the worker service below
+    volumes:
+      - objects:/data/objects
+    depends_on:
+      bootstrap: { condition: service_completed_successfully }
+    restart: unless-stopped
+
+  worker:
+    build: ./backend
+    command: ["python", "-m", "mrm.cli", "worker"]
+    environment: *backend-env
+    volumes:
+      - objects:/data/objects
+    depends_on:
+      bootstrap: { condition: service_completed_successfully }
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+
+  web:
+    build: ./frontend
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    depends_on:
+      api: { condition: service_healthy }
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  objects:
