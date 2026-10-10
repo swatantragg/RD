@@ -35,9 +35,7 @@ class Settings:
     secret_key: str
     session_hours: int
     cookie_secure: str                                      # auto | true | false
-    demo_enabled: bool                                      # earlier comparison module's walkthrough only
     allow_signup: bool
-    reference_input: Path
     max_upload_mb: int
     max_unzipped_mb: int
     max_cells: int
@@ -46,7 +44,6 @@ class Settings:
     login_max_failures: int
     pool_size: int
     log_level: str
-    legacy_comparison: bool
     rd_worker: str
 
 
@@ -59,9 +56,7 @@ def load() -> Settings:
         secret_key=_env("SECRET_KEY", "dev-only-secret-change-me"),
         session_hours=_int("SESSION_HOURS", 10),
         cookie_secure=_env("COOKIE_SECURE", "auto"),
-        demo_enabled=_bool("DEMO_ENABLED", False),
         allow_signup=_bool("ALLOW_SIGNUP", True),
-        reference_input=Path(_env("REFERENCE_INPUT", str(REPO_ROOT / "Docs" / "input"))),
         max_upload_mb=_int("MAX_UPLOAD_MB", 64),
         max_unzipped_mb=_int("MAX_UNZIPPED_MB", 512),
         max_cells=_int("MAX_CELLS", 2_000_000),
@@ -70,7 +65,6 @@ def load() -> Settings:
         login_max_failures=_int("LOGIN_MAX_FAILURES", 8),
         pool_size=_int("DB_POOL_SIZE", 10),
         log_level=_env("LOG_LEVEL", "INFO"),
-        legacy_comparison=_bool("LEGACY_COMPARISON", False),
         rd_worker=_env("RD_WORKER", "thread"),
     )
 

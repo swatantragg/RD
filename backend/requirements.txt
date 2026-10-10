@@ -1,4 +1,4 @@
-# MRM Royalty Comparison backend
+# Royalty Reports backend (runtime packages)
 fastapi==0.142.4
 uvicorn[standard]==0.54.0
 python-multipart==0.0.32

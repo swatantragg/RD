@@ -1,4 +1,4 @@
-"""Command line: python -m mrm.cli migrate | seed | bootstrap | worker | create-user | verify-audit | purge-demo"""
+"""Command line: python -m mrm.cli migrate | seed | bootstrap | worker | create-user | verify-audit"""
 from __future__ import annotations
 
 import argparse
@@ -27,7 +27,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("migrate")
     sub.add_parser("seed")
-    sub.add_parser("bootstrap", help="migrate, then seed the first client (no demo data)")
+    sub.add_parser("bootstrap", help="migrate, then set up the first client (SVF)")
     u = sub.add_parser("create-user")
     u.add_argument("email")
     u.add_argument("name")
@@ -36,8 +36,6 @@ def main(argv: list[str] | None = None) -> int:
     u.add_argument("password")
     sub.add_parser("verify-audit")
     sub.add_parser("worker", help="process queued runs and publications (background jobs)")
-    pd = sub.add_parser("purge-demo", help="one-time clean-up after the demo version: keep one account, delete the demo ones")
-    pd.add_argument("--keep", required=True, help="email of the account to keep (it gets every role)")
     a = ap.parse_args(argv)
     s = config.settings
     if a.cmd in ("migrate", "bootstrap"):
@@ -56,11 +54,6 @@ def main(argv: list[str] | None = None) -> int:
                 conn.execute("INSERT INTO client_grant (user_id, client_id) SELECT %s, id FROM client WHERE code = %s "
                              "ON CONFLICT DO NOTHING", (uid, code))
         print(f"user {a.email} ready")
-    if a.cmd == "purge-demo":
-        wait_for_db(s.migrator_database_url)
-        from .maintenance import purge_demo
-        print("purge-demo:")
-        purge_demo(a.keep)
     if a.cmd == "worker":
         wait_for_db(s.database_url)
         from .rd import jobs

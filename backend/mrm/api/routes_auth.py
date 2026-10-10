@@ -23,8 +23,7 @@ def me_out(a: dict) -> dict:
                 role_labels=[access.ROLE_LABEL.get(r, r) for r in a["roles"]],
                 can={k: access.can(a, k) for k in access.CAN}, clients=clients,
                 member_since=u["created_at"], last_sign_in=u["last_login_at"],
-                version=__version__, whats_new=releases.unseen(u["seen_version"]),
-                legacy=config.settings.legacy_comparison)
+                version=__version__, whats_new=releases.unseen(u["seen_version"]))
 
 
 @router.get("/auth/options")

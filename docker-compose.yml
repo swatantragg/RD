@@ -9,7 +9,6 @@ x-backend-env: &backend-env
   STORAGE_ROOT: /data/objects
   ALLOW_SIGNUP: ${ALLOW_SIGNUP:-true}
   COOKIE_SECURE: ${COOKIE_SECURE:-auto}
-  LEGACY_COMPARISON: ${LEGACY_COMPARISON:-false}
   LOG_LEVEL: INFO
 
 services:

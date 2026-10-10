@@ -8,15 +8,9 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 
 from .. import __version__, config, db
-from ..cases import CaseError
-from ..compare import RunError
-from ..identity import IdentityError
-from ..intake import IntakeError
-from ..packs import PackError
 from ..rd.service import RDError
-from ..rules import RuleError
 from ..security import Forbidden
-from . import routes_admin, routes_auth, routes_identity, routes_intake, routes_rd, routes_results
+from . import routes_auth, routes_rd
 from .deps import COOKIE, Unauthorized
 
 logging.basicConfig(level=config.settings.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -53,7 +47,7 @@ async def _forbidden(_, e):
     return _err(403, str(e))
 
 
-for _cls in (IntakeError, IdentityError, RuleError, RunError, PackError, CaseError, ValueError, RDError):
+for _cls in (ValueError, RDError):
     app.add_exception_handler(_cls, lambda _, e: _err(400, str(e)))
 
 
@@ -91,6 +85,3 @@ def _start_worker():
 
 app.include_router(routes_auth.router, prefix="/api")
 app.include_router(routes_rd.router, prefix="/api")
-if config.settings.legacy_comparison:                    # flowchart D-H comparison module (kept, not in the main UI)
-    for _r in (routes_admin, routes_intake, routes_identity, routes_results):
-        app.include_router(_r.router, prefix="/api/compare")

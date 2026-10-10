@@ -16,10 +16,10 @@ from . import config, db
 ROLES = ("admin", "importer", "rights_reviewer", "accounts", "approver", "sender", "viewer")
 ROLE_LABELS = {
     "admin": "Administrator",
-    "importer": "Import & build (Swatantra)",
-    "rights_reviewer": "Rights & identity review (Devi)",
+    "importer": "Import & build",
+    "rights_reviewer": "Rights & identity review",
     "accounts": "Accounts & payments",
-    "approver": "Approver (Sherley)",
+    "approver": "Approver",
     "sender": "Authorised sender",
     "viewer": "Read only",
 }

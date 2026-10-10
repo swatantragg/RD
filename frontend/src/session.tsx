@@ -10,7 +10,7 @@ export type Me = {
   clients: ClientRef[]; whats_new: Release[]; member_since: string | null; last_sign_in: string | null;
 };
 
-/** 'Asha Rao' -> 'AR', 'Swatantra' -> 'S'. */
+/** 'First Last' -> 'FL', 'First' -> 'F'. */
 export function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   if (!parts.length) return "?";

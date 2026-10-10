@@ -1,11 +1,7 @@
-"""The first client (SVF) and its configuration. No demonstration people or data."""
+"""The first client (SVF) and its configuration. Nothing else: no people, runs, files or reports."""
 from __future__ import annotations
 
 from . import audit, db, security
-
-# Demo accounts created by earlier versions (shared, published password). They are switched off on every bootstrap.
-RETIRED_DEMO = ("admin@mrm.local", "swatantra@mrm.local", "devi@mrm.local", "accounts@mrm.local", "sherley@mrm.local",
-                "viewer@mrm.local")
 
 
 def create_user(conn, email: str, name: str, roles: list[str], password: str) -> int:
@@ -30,17 +26,7 @@ def seed(echo=print) -> None:
                 notes="Publisher and label; IPRS member 5154290 (IPI 00871526032)."))
             audit.record(conn, "client.created", None, "client", cid, dict(code="SVF"))
         setup_svf(conn)
-        retired = retire_demo_accounts(conn)
-    echo("  client SVF ready" + (f"; {retired} demo account(s) switched off" if retired else ""))
-
-
-def retire_demo_accounts(conn) -> int:
-    rows = db.all(conn, "UPDATE app_user SET active = FALSE WHERE email = ANY(%s) AND active RETURNING id, email",
-                  (list(RETIRED_DEMO),))
-    for r in rows:
-        conn.execute("UPDATE app_session SET revoked_at = now() WHERE user_id = %s AND revoked_at IS NULL", (r["id"],))
-        audit.record(conn, "user.demo_retired", None, "app_user", r["id"], dict(email=r["email"]))
-    return len(rows)
+    echo("  client SVF ready")
 
 
 SVF_SETTINGS = {"output_prefix": "SVF-RD-SKV", "next_generation": 9, "song_list_name": "SVF list",
