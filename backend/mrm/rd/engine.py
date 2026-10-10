@@ -369,7 +369,7 @@ def build(inp: RunInput) -> Result:
         if ck == "ISRC" and code not in target.all_isrcs:
             target.extra_isrcs.append(code)
             idx_isrc[code] = [target]
-            target.basis_note = f"ISRC - confirmed match (decision #{d.id}{', approved by ' + d.approved_by if d.approved_by else ''})"
+            target.basis_note = f"ISRC - confirmed match (decision #{d.id}{', by ' + d.approved_by if d.approved_by else ''})"
             target.notes.append(f"Linked by decision #{d.id}: ISRC {code}")
         elif ck == "WORK" and code not in target.all_works:
             target.extra_works.append(code)

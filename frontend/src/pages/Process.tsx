@@ -136,10 +136,8 @@ function RunWizard({ runId }: { runId: number }) {
             {r.can_delete && <DeleteRun run={r} />}
           </>}>
       <Steps steps={STEPS} current={step} done={done} onPick={(i) => setView(i === natural ? null : i)} />
-      {readOnly && <Notice>{me.can.approve
-        ? <>This run was prepared by {r.created_by}. When it is sent for approval, you can approve and publish it here.</>
-        : <>You are following this run, prepared by {r.created_by}. You can download the reports once an approver has
-          published them.</>}</Notice>}
+      {readOnly && <Notice>You are following this run, prepared by {r.created_by}. You can download the reports once
+        they are published.</Notice>}
       {readOnly && step <= 2 && <Card title={`Files (${r.files.length})`}>{r.files.length ? <FileList run={r} /> : <p className="muted">No files yet.</p>}</Card>}
       {!readOnly && step <= 1 && <UploadStep run={r} onNext={() => setView(2)} onBusy={() => setView(1)} />}
       {!readOnly && step === 2 && <CheckStep run={r} onNext={() => setView(3)} onBack={() => setView(1)} />}

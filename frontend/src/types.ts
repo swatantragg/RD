@@ -31,7 +31,7 @@ export type Run = {
   id: number; title: string; client: Client; created_by: string; created_at: string; updated_at: string;
   files: FileOut[]; counts: { total: number; ready: number; needs_review: number; left_out: number; error: number };
   issues: RunIssue[]; blocked: string[]; can_process: boolean; builds: BuildRef[]; latest_build: number | null;
-  changed_since_build: boolean; decisions_waiting: number; state: State; closed: boolean;
+  changed_since_build: boolean; state: State; closed: boolean;
   can_delete: boolean; delete_note: string | null;
 };
 
@@ -53,7 +53,7 @@ export type Report = {
 export type Decision = {
   id: number; kind: string; text: string; state: string; reason: string | null; made_by: string; made_at: string;
   made_by_id: number; checked_by: string | null; subject: any; value: any; original: any; evidence: any;
-  client_code?: string; can_approve?: boolean;
+  client_code?: string;
 };
 
 export type Build = {
@@ -69,10 +69,8 @@ export type Build = {
   checks: { id: string; ok: boolean; text: string; detail?: string; blocking?: boolean }[]; notices: string[];
   left_out: { file_id: number; label: string; reason: string; total?: string | null }[];
   generation: string | null; created_by: string; created_at: string; finished_at: string | null;
-  submitted_by: string | null; submitted_at: string | null; approved_by: string | null; published_at: string | null;
-  returned_reason: string | null;
-  issues: Issue[]; findings: number; reports: Report[]; can_submit: boolean; can_approve: boolean;
-  why_not_approve: string | null; blocking: number; waiting_decisions: Decision[]; approved_since: number;
+  published_by: string | null; published_at: string | null; returned_reason: string | null;
+  issues: Issue[]; findings: number; reports: Report[]; can_publish: boolean; blocking: number;
   inputs: { file_id: number; filename: string; kind: string; label: string; total: string | null }[];
   publishing: boolean;
 };

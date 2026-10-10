@@ -262,7 +262,7 @@ def _jsonable(v):
 def provenance_note(res: Result, generation: str, state: str, build_ref: str, ruleset: dict, left_out: list[dict],
                     decisions: list[dict]) -> str:
     st = res.statements
-    parts = [f"{generation} ({'DRAFT - not approved' if state != 'PUBLISHED' else 'published'}; build {build_ref}; "
+    parts = [f"{generation} ({'DRAFT - not published' if state != 'PUBLISHED' else 'published'}; build {build_ref}; "
              f"rule set v{ruleset.get('version')}).  Grain: {res.grain}."]
     parts.append(f"Built from {len(st)} royalty statement{'s' if len(st) != 1 else ''} "
                  f"({_m(sum((c.shown_total for b in res.bands if b.kind == 'ROYALTY' for c in b.cols if c.origin == 'source'), ZERO))} society royalty)"
@@ -273,7 +273,7 @@ def provenance_note(res: Result, generation: str, state: str, build_ref: str, ru
                     "the statements)") + ".")
     parts.append("Money is placed only through codes: royalty by IPRS work number, platform revenue by ISRC. A work "
                  "listed on several rows is booked once (column 'Royalty Booked On' names the row). A song title "
-                 "never moves money without an approved decision. Society royalty (column D) and platform revenue "
+                 "never moves money without a recorded review decision. Society royalty (column D) and platform revenue "
                  "are different kinds of money and are never added together.")
     if res.totals.get("held_rows"):
         parts.append(f"{res.totals['held_rows']} held row(s) carry money that waits for a decision "
@@ -283,7 +283,7 @@ def provenance_note(res: Result, generation: str, state: str, build_ref: str, ru
         parts.append("Left out of this report: " + "; ".join(f"{x['label']} - {x['reason']}" for x in left_out[:12])
                      + ("; …" if len(left_out) > 12 else "") + ".")
     if decisions:
-        parts.append(f"{len(decisions)} approved decision(s) applied (listed on the Run Summary sheet).")
+        parts.append(f"{len(decisions)} review decision(s) applied (listed on the Run Summary sheet).")
     parts.append("Every figure is computed from the source files and re-checked before the file is written.")
     return "  ".join(parts)
 
@@ -305,11 +305,10 @@ def run_summary(wb: Workbook, res: Result, *, client_code, generation, state, bu
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=7)
     r = 3
     kv = [("Client", client_code), ("Report", generation),
-          ("State", "DRAFT - not approved for use" if state != "PUBLISHED" else "Published (approved)"),
+          ("State", "DRAFT - not published" if state != "PUBLISHED" else "Published"),
           ("Build", build_ref)] + \
          [(label, (people or {}).get(key)) for key, label in (("prepared_by", "Prepared by"),
-                                                              ("submitted_by", "Sent for approval by"),
-                                                              ("approved_by", "Approved and published by"))
+                                                              ("approved_by", "Published by"))
           if (people or {}).get(key)] + \
          [("Rule set", f"v{ruleset.get('version')}  ({rulesha(ruleset)[:12]})"),
           ("Software", software), ("Grain", res.grain), ("Base", res.base_label or "none"),
@@ -331,8 +330,8 @@ def run_summary(wb: Workbook, res: Result, *, client_code, generation, state, bu
     r = _table(ws, r, "CHECKS (every one must pass before a report is written)", ["Check", "Result", "Detail"],
                [[f"{c['id']}  {c['text']}", "PASS" if c["ok"] else "FAIL", c.get("detail") or ""] for c in res.checks])
     if decisions:
-        r = _table(ws, r, "DECISIONS APPLIED", ["#", "Decision", "Made by", "Approved by", "Reason"],
-                   [[d["id"], d["text"], d.get("made_by"), d.get("approved_by"), d.get("reason")] for d in decisions])
+        r = _table(ws, r, "DECISIONS APPLIED", ["#", "Decision", "Made by", "Reason"],
+                   [[d["id"], d["text"], d.get("made_by"), d.get("reason")] for d in decisions])
     if res.notices:
         r = _table(ws, r, "NOTICES", ["Notice"], [[n] for n in res.notices])
 
@@ -662,5 +661,5 @@ def companion_note(res: Result, groups: list[dict], kind: str, client_code: str,
     kinds = ("Royalty distributed by IPRS is the rights holder's share; platform revenue is what the platform "
              "reported. They are different kinds of money" + (" and are added together only in the column "
                                                                "'Total (Both Sources)'." if combined_total else "."))
-    state_text = "" if state == "PUBLISHED" else "  DRAFT - not approved for use."
+    state_text = "" if state == "PUBLISHED" else "  DRAFT - not published."
     return f"{rule}  {money_text}  {kinds}{state_text}"

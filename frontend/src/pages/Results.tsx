@@ -4,7 +4,8 @@ import { api, qs } from "../api";
 import { money } from "../format";
 import { useApp } from "../session";
 import type { Build, Finding, Issue, Report, Run } from "../types";
-import { Button, Card, DownloadButton, Empty, Loading, Money, More, Notice, Pill, Select, when, type Option, type Tone } from "../ui";
+import { ReportPreview } from "../ReportPreview";
+import { Button, Card, Dialog, DownloadButton, Empty, Loading, Money, More, Notice, Pill, Select, when, type Option, type Tone } from "../ui";
 
 // ================================================================== step 4: process
 export function ProcessStep({ run, build, onStarted }: { run: Run; build: Build | undefined; onStarted: () => void }) {
@@ -113,7 +114,7 @@ export function ReviewStep({ run, build, onNext }: { run: Run; build: Build; onN
   return (
     <>
       <Summary build={build} />
-      <ChangesBanner run={run} build={build} />
+      <ChangesBanner run={run} />
       <h2 className="sec">Needs your review</h2>
       {sections.length === 0 ? <Card><Empty title="Nothing needs review">You can download the reports.</Empty></Card> : (
         <div className="tiles" role="tablist">
@@ -156,7 +157,7 @@ function Queue({ items, render, intro }: { items: Issue[]; render: (i: Issue) =>
           {items.map((i, k) => (
             <li key={i.no} className="click" onClick={() => { setPos(k); setList(false); }}>
               <span>{i.title}</span>
-              {i.decision ? <Pill tone={i.decision.state === "ACTIVE" ? "good" : "info"}>{i.decision.state === "ACTIVE" ? "Decided" : "Waiting for approval"}</Pill>
+              {i.decision ? <Pill tone="good">Decided</Pill>
                 : i.later ? <Pill tone="neutral">Later</Pill> : <Pill tone="warn">Open</Pill>}
             </li>
           ))}
@@ -191,18 +192,15 @@ function QueueAdvance({ issue, onAnswered, children }: { issue: Issue; onAnswere
   return <>{children}</>;
 }
 
-function ChangesBanner({ run, build }: { run: Run; build: Build }) {
+function ChangesBanner({ run }: { run: Run }) {
   const { me, toast } = useApp();
   const qc = useQueryClient();
-  const waiting = build.waiting_decisions.length;
-  const changed = run.changed_since_build;
-  if (!waiting && !changed) return null;
+  if (!run.changed_since_build || !me.can.prepare) return null;
   return (
     <Notice tone="info">
-      {waiting > 0 && <div>{waiting} change{waiting === 1 ? " is" : "s are"} waiting for an approver. The money only moves after approval.</div>}
-      {changed && me.can.prepare && (
+      {(
         <div className="row">
-          <span>Answers or approved changes are not in these reports yet. Process again to include them.</span>
+          <span>Answers or changes are not in these reports yet. Process again to include them.</span>
           <Button kind="primary" onClick={async () => {
             try { await api.post(`/runs/${run.id}/process`); qc.invalidateQueries({ queryKey: ["run", run.id] }); }
             catch (e) { toast((e as Error).message, true); }
@@ -228,8 +226,7 @@ function useAct(build: Build) {
 
 function Decided({ issue }: { issue: Issue }) {
   if (issue.decision) {
-    return <Pill tone={issue.decision.state === "ACTIVE" ? "good" : "info"}>
-      {issue.decision.state === "ACTIVE" ? "Decided" : "Waiting for approval"}: {issue.decision.text}</Pill>;
+    return <Pill tone="good">Decided: {issue.decision.text}</Pill>;
   }
   if (issue.later) return <Pill tone="neutral">Saved for later</Pill>;
   return null;
@@ -402,88 +399,89 @@ const REPORT_INFO: Record<string, { title: string; text: string; button: string 
 
 export function DownloadStep({ run, build, onReview }: { run: Run; build: Build; onReview: () => void }) {
   const { me, toast } = useApp();
-  const qc = useQueryClient();
-  const [busy, setBusy] = useState("");
-  const [note, setNote] = useState("");
+  const [preview, setPreview] = useState<number | null>(null);
+  const [confirm, setConfirm] = useState(false);
   const isFinal = build.state === "PUBLISHED" || build.state === "SUPERSEDED";
-  const post = async (path: string, body?: unknown) => {
-    setBusy(path);
-    try {
-      const r = await api.post<{ message: string }>(path, body);
-      toast(r.message);
-      qc.invalidateQueries({ queryKey: ["build", build.id] });
-      qc.invalidateQueries({ queryKey: ["run", run.id] });
-      qc.invalidateQueries({ queryKey: ["home"] });
-    } catch (e) { toast((e as Error).message, true); } finally { setBusy(""); }
-  };
   const reports = [...build.reports].sort((a, b) => ["MASTER", "MISSING", "NON_CLIENT"].indexOf(a.kind) - ["MASTER", "MISSING", "NON_CLIENT"].indexOf(b.kind));
   const canDraft = me.can.draft_download || isFinal;
+  const viewable = reports.filter((r) => r.available && canDraft);
   return (
     <>
       <Card title={isFinal ? "Reports are published" : "Reports are ready"}
-            sub={isFinal ? `${build.generation} · approved by ${build.approved_by} · ${when(build.published_at)}` : "Draft - validated, not yet approved."}
+            sub={isFinal ? `${build.generation} · published by ${build.published_by} · ${when(build.published_at)}` : "Draft - validated, not yet published."}
             tone={isFinal ? "good" : undefined}>
-        {build.returned_reason && !isFinal && <Notice tone="warn">Returned by the approver: {build.returned_reason}</Notice>}
         <div className="reports">
-          {reports.map((r, i) => <ReportCard key={r.id} n={i + 1} r={r} canDownload={canDraft} />)}
+          {reports.map((r, i) => <ReportCard key={r.id} n={i + 1} r={r} canDownload={canDraft}
+                                             onPreview={() => setPreview(viewable.findIndex((x) => x.id === r.id))} />)}
         </div>
         {reports.filter((r) => r.available).length > 1 && canDraft && (
           <div className="actions"><DownloadButton kind="secondary" path={`/builds/${build.id}/download-all`} onError={(m) => toast(m, true)}>Download All Reports (.zip)</DownloadButton></div>
         )}
       </Card>
 
-      {!isFinal && (
-        <Card title="Approval" sub={build.state_text}>
+      {!isFinal && me.can.prepare && (
+        <Card title="Publish" sub={build.state_text}>
           {build.state === "CHECKED" && (
             <>
-              <p>When the reports look right, send them to an approver. A different person must approve before they are published.</p>
-              {build.blocking > 0 && <Notice tone="warn">{build.blocking} item{build.blocking === 1 ? " must" : "s must"} be resolved before sending for approval.</Notice>}
+              {build.returned_reason && <Notice tone="warn">Publishing stopped: {build.returned_reason}</Notice>}
+              <p>When the reports look right, publish them. They are saved for good as <b>{nextName(run)}</b> and everyone
+                with access can download them. A published report never changes; a later correction becomes the next
+                number.</p>
+              {build.blocking > 0 && <Notice tone="warn">{build.blocking} item{build.blocking === 1 ? " must" : "s must"} be resolved before publishing.</Notice>}
               {(build.summary.unreviewed ?? 0) > 0 && <Notice>{build.summary.unreviewed} missing songs are not reviewed yet. The out-of-scope report only contains songs reviewed so far.</Notice>}
-              {run.changed_since_build && <ChangesBanner run={run} build={build} />}
+              {run.changed_since_build && <ChangesBanner run={run} />}
               <div className="actions">
-                <Button kind="primary" disabled={!build.can_submit || run.changed_since_build} busy={busy.endsWith("submit")}
-                        onClick={() => post(`/builds/${build.id}/submit`)}>Send for Approval</Button>
+                <Button kind="primary" disabled={!build.can_publish || run.changed_since_build} onClick={() => setConfirm(true)}>Publish Reports</Button>
                 <Button kind="ghost" onClick={onReview}>Back to review</Button>
               </div>
             </>
           )}
-          {build.state === "SUBMITTED" && (
-            <>
-              {build.publishing ? <p><span className="spin" /> Approved - preparing the final reports…</p> : (
-                <>
-                  <p>Sent by {build.submitted_by} on {when(build.submitted_at)}.</p>
-                  {build.why_not_approve && <Notice>{build.why_not_approve}</Notice>}
-                  {me.can.approve && build.can_approve && (
-                    <>
-                      <ul className="plain">
-                        <li>Society royalty: <b><Money v={build.summary.royalty} /></b></li>
-                        {Object.entries(build.summary.platform ?? {}).map(([k, v]) => <li key={k}>{k}: <b><Money v={v} /></b></li>)}
-                        <li>All {build.checks.filter((c) => c.ok).length} financial checks passed.</li>
-                        {build.left_out.length > 0 && <li>{build.left_out.length} file{build.left_out.length === 1 ? "" : "s"} not included (listed in the Run Summary sheet).</li>}
-                        {build.waiting_decisions.length > 0 && <li>{build.waiting_decisions.length} proposed change(s) are not in this version.</li>}
-                      </ul>
-                      <div className="actions">
-                        <Button kind="primary" busy={busy.endsWith("approve")} onClick={() => post(`/builds/${build.id}/approve`)}>Approve and Publish</Button>
-                      </div>
-                      <More label="Return with a note instead">
-                        <div className="row">
-                          <input className="input grow" value={note} onChange={(e) => setNote(e.target.value)} placeholder="What needs to change?" />
-                          <Button disabled={!note.trim()} onClick={() => post(`/builds/${build.id}/return`, { reason: note })}>Return</Button>
-                        </div>
-                      </More>
-                    </>
-                  )}
-                </>
-              )}
-            </>
-          )}
+          {build.state === "SUBMITTED" && <p><span className="spin" /> Publishing - preparing the final reports…</p>}
         </Card>
+      )}
+      {confirm && <PublishDialog run={run} build={build} onClose={() => setConfirm(false)} />}
+      {preview !== null && preview >= 0 && (
+        <ReportPreview reports={viewable.map((r) => ({ id: r.id, label: REPORT_INFO[r.kind].title }))} start={preview}
+                       onClose={() => setPreview(null)} />
       )}
     </>
   );
 }
 
-function ReportCard({ n, r, canDownload }: { n: number; r: Report; canDownload: boolean }) {
+function nextName(run: Run) {
+  return `${run.client.output_prefix}${run.client.next_generation}`;
+}
+
+function PublishDialog({ run, build, onClose }: { run: Run; build: Build; onClose: () => void }) {
+  const { toast } = useApp();
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  return (
+    <Dialog title={`Publish ${nextName(run)}?`} sub={run.title} onClose={onClose}>
+      <ul className="plain">
+        <li>Society royalty: <b><Money v={build.summary.royalty} /></b></li>
+        {Object.entries(build.summary.platform ?? {}).map(([k, v]) => <li key={k}>{k}: <b><Money v={v} /></b></li>)}
+        <li>All {build.checks.filter((c) => c.ok).length} financial checks passed.</li>
+        {build.left_out.length > 0 && <li>{build.left_out.length} file{build.left_out.length === 1 ? "" : "s"} not included (listed in the Run Summary sheet).</li>}
+      </ul>
+      <Notice>Published reports are kept for good: they cannot be changed or deleted.</Notice>
+      <div className="actions end">
+        <Button onClick={onClose}>Cancel</Button>
+        <Button kind="primary" busy={busy} onClick={async () => {
+          setBusy(true);
+          try {
+            const r = await api.post<{ message: string }>(`/builds/${build.id}/publish`);
+            toast(r.message);
+            for (const k of [["build", build.id], ["run", run.id], ["home"], ["past"]]) qc.invalidateQueries({ queryKey: k });
+            onClose();
+          } catch (e) { toast((e as Error).message, true); setBusy(false); }
+        }}>Publish</Button>
+      </div>
+    </Dialog>
+  );
+}
+
+function ReportCard({ n, r, canDownload, onPreview }: { n: number; r: Report; canDownload: boolean; onPreview: () => void }) {
   const { toast } = useApp();
   const info = REPORT_INFO[r.kind];
   const tone = r.state.code === "PUBLISHED" ? "good" : r.state.code === "HELD" ? "warn" : "info";
@@ -498,6 +496,7 @@ function ReportCard({ n, r, canDownload }: { n: number; r: Report; canDownload: 
       </div>
       <div className="report-a">
         <DownloadButton path={`/reports/${r.id}/download`} disabled={!r.available || !canDownload} onError={(m) => toast(m, true)}>{info.button}</DownloadButton>
+        <Button kind="secondary" disabled={!r.available || !canDownload} onClick={onPreview}>Preview</Button>
       </div>
     </div>
   );

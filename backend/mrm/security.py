@@ -1,7 +1,5 @@
-"""Roles and permissions (page 9: who builds, who reviews rights, who approves, who sends), passwords, sessions.
-
-Checked on the server for every request; the screen only hides what the server already refuses. Maker and checker
-are always different people: a rule or a report pack is never approved by the person who drafted it.
+"""Roles, passwords and sessions. What each role may do is in rd/access.py and is checked on the server for every
+request; the screen only hides what the server already refuses.
 """
 from __future__ import annotations
 
@@ -13,55 +11,11 @@ import secrets
 
 from . import config, db
 
-ROLES = ("admin", "importer", "rights_reviewer", "accounts", "approver", "sender", "viewer")
-ROLE_LABELS = {
-    "admin": "Administrator",
-    "importer": "Import & build",
-    "rights_reviewer": "Rights & identity review",
-    "accounts": "Accounts & payments",
-    "approver": "Approver",
-    "sender": "Authorised sender",
-    "viewer": "Read only",
-}
-
-PERMISSIONS: dict[str, tuple[str, ...]] = {
-    "view": ROLES,
-    "upload": ("importer",),                           # A1-B5: upload, classify, confirm metadata
-    "intake_review": ("importer", "accounts"),           # accept row exceptions, approve alternative control, duplicates
-    "clients": ("rights_reviewer",),                    # mandate, member ID, controlled share
-    "identity": ("rights_reviewer",),                   # C1-C4 decisions
-    "identity_approve": ("rights_reviewer", "approver"),  # C5 freeze an identity version
-    "rule_draft": ("accounts",),                        # E1-E5
-    "rule_approve": ("approver",),
-    "run": ("importer", "accounts"),                    # D-G comparison run
-    "pack_build": ("importer", "accounts"),             # H1
-    "pack_approve": ("approver",),                      # H3
-    "send": ("sender", "approver"),                     # H4 send + log reply
-    "case_update": ("rights_reviewer", "accounts", "approver"),  # H5
-    "payment": ("accounts",),
-    "users": ("admin",),
-    "audit": ("admin", "approver"),
-}
+ROLES = ("admin", "importer", "rights_reviewer", "accounts", "viewer")
 
 
 class Forbidden(Exception):
     pass
-
-
-def has(actor: dict, permission: str) -> bool:
-    roles = actor.get("roles", ())
-    return "admin" in roles or any(r in PERMISSIONS[permission] for r in roles)
-
-
-def require(actor: dict, permission: str) -> None:
-    if not has(actor, permission):
-        need = " or ".join(ROLE_LABELS[r] for r in PERMISSIONS[permission])
-        raise Forbidden(f"this needs the {need} role")
-
-
-def not_same_person(actor: dict, maker_id: int | None, what: str) -> None:
-    if maker_id is not None and actor["id"] == maker_id:
-        raise Forbidden(f"{what} must be approved by someone other than the person who prepared it")
 
 
 # ------------------------------------------------------------------ passwords (scrypt, stdlib)

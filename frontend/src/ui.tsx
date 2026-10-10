@@ -52,7 +52,7 @@ export function FileStatus({ status, text }: { status: string; text: string }) {
 }
 
 const RUN_TONE: Record<string, Tone> = { ADDING_FILES: "info", FILES_NEED_ATTENTION: "warn", PROCESSING: "info",
-  FAILED: "bad", NEEDS_REVIEW: "warn", READY: "good", WAITING_APPROVAL: "info", PUBLISHED: "good" };
+  FAILED: "bad", NEEDS_REVIEW: "warn", READY: "good", PUBLISHING: "info", PUBLISHED: "good" };
 export function RunStatus({ state }: { state: { code: string; text: string } }) {
   return <Pill tone={RUN_TONE[state.code] ?? "neutral"}>{state.text}</Pill>;
 }
@@ -167,7 +167,7 @@ export function PasswordField({ label, value, onChange, autoComplete, hint }: {
 
 /** A small pop-up window. Esc or Cancel closes it; a click outside does not (so typing is never lost). */
 export function Dialog({ title, sub, onClose, children, wide }: {
-  title: ReactNode; sub?: ReactNode; onClose: () => void; children: ReactNode; wide?: boolean;
+  title: ReactNode; sub?: ReactNode; onClose: () => void; children: ReactNode; wide?: boolean | "xl";
 }) {
   const id = useId();
   const box = useRef<HTMLDivElement>(null);
@@ -182,7 +182,7 @@ export function Dialog({ title, sub, onClose, children, wide }: {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div className="modal-back">
-      <div ref={box} className={`modal ${wide ? "wide" : ""}`} role="dialog" aria-modal="true" aria-labelledby={id}>
+      <div ref={box} className={`modal ${wide === "xl" ? "xl" : wide ? "wide" : ""}`} role="dialog" aria-modal="true" aria-labelledby={id}>
         <div className="modal-h">
           <div>
             <h2 id={id}>{title}</h2>

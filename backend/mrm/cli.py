@@ -31,7 +31,7 @@ def main(argv: list[str] | None = None) -> int:
     u = sub.add_parser("create-user")
     u.add_argument("email")
     u.add_argument("name")
-    u.add_argument("roles", help="comma separated: admin,importer,rights_reviewer,accounts,approver,viewer")
+    u.add_argument("roles", help="comma separated: admin,importer,rights_reviewer,accounts,viewer")
     u.add_argument("--clients", default="", help="comma separated client codes this person may see (e.g. SVF)")
     u.add_argument("password")
     sub.add_parser("verify-audit")

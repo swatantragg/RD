@@ -1,4 +1,4 @@
-"""The royalty processing platform: home, clients, processing runs, files, results, review, approval, downloads."""
+"""The royalty processing platform: home, clients, processing runs, files, results, review, publishing, downloads."""
 from __future__ import annotations
 
 import urllib.parse
@@ -136,34 +136,9 @@ def set_status(bid: int, body: dict = Body(...), a: dict = Depends(actor)):
                                 body.get("note")))
 
 
-@router.post("/builds/{bid}/submit")
-def submit(bid: int, a: dict = Depends(actor)):
-    return J(service.submit(a, bid))
-
-
-@router.post("/builds/{bid}/approve")
-def approve(bid: int, a: dict = Depends(actor)):
-    return J(service.approve_build(a, bid))
-
-
-@router.post("/builds/{bid}/return")
-def return_build(bid: int, body: dict = Body(...), a: dict = Depends(actor)):
-    return J(service.return_build(a, bid, s(body.get("reason"))))
-
-
-@router.get("/approvals")
-def approvals(a: dict = Depends(actor)):
-    return J(service.approvals(a))
-
-
-@router.post("/decisions/{did}/approve")
-def approve_decision(did: int, body: dict = Body(default={}), a: dict = Depends(actor)):
-    return J(service.check_decision(a, did, True, body.get("note")))
-
-
-@router.post("/decisions/{did}/reject")
-def reject_decision(did: int, body: dict = Body(default={}), a: dict = Depends(actor)):
-    return J(service.check_decision(a, did, False, body.get("note")))
+@router.post("/builds/{bid}/publish")
+def publish(bid: int, a: dict = Depends(actor)):
+    return J(service.publish(a, bid))
 
 
 def _attachment(name: str, data: bytes, media: str) -> Response:
@@ -178,6 +153,11 @@ def _attachment(name: str, data: bytes, media: str) -> Response:
 def download(rid: int, a: dict = Depends(actor)):
     name, data = service.report_file(a, rid)
     return _attachment(name, data, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+@router.get("/reports/{rid}/preview")
+def preview(rid: int, sheet: int = 0, a: dict = Depends(actor)):
+    return J(service.report_preview(a, rid, sheet))
 
 
 @router.get("/builds/{bid}/download-all")
@@ -196,8 +176,7 @@ def people(a: dict = Depends(actor)):
                             "FILTER (WHERE g.client_id IS NOT NULL), '{}') AS clients FROM app_user u LEFT JOIN user_role "
                             "r ON r.user_id = u.id LEFT JOIN client_grant g ON g.user_id = u.id GROUP BY u.id "
                             "ORDER BY u.name")
-    return J(dict(people=rows, roles=[dict(value=k, label=v) for k, v in access.ROLE_LABEL.items()
-                                      if k != "sender"]))
+    return J(dict(people=rows, roles=[dict(value=k, label=v) for k, v in access.ROLE_LABEL.items()]))
 
 
 @router.post("/people")
@@ -256,7 +235,7 @@ def update_person(uid: int, body: dict = Body(...), a: dict = Depends(actor)):
 
 @router.delete("/people/{uid}")
 def delete_person(uid: int, a: dict = Depends(actor)):
-    """Delete an account that has no recorded work. Anyone who uploaded, prepared, approved or decided something stays
+    """Delete an account that has no recorded work. Anyone who uploaded, prepared, published or decided something stays
     (switched off), so every report remains traceable to a person."""
     import psycopg
     access.require(a, "manage")
@@ -271,7 +250,7 @@ def delete_person(uid: int, a: dict = Depends(actor)):
                 conn.execute("UPDATE client_grant SET granted_by = NULL WHERE granted_by = %s", (uid,))
                 conn.execute("DELETE FROM app_user WHERE id = %s", (uid,))
         except psycopg.errors.ForeignKeyViolation:
-            raise service.RDError(f"{u['email']} has uploaded, prepared, approved or decided something, so the account "
+            raise service.RDError(f"{u['email']} has uploaded, prepared, published or decided something, so the account "
                                   "must stay to keep that history traceable. Switch it off instead.") from None
         audit.record(conn, "user.deleted", a, "app_user", uid, dict(email=u["email"]))
     return J({"ok": True})

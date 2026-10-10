@@ -3,15 +3,13 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { initials, useApp } from "../session";
 import { ThemeSwitch } from "../theme";
-import type { Decision } from "../types";
-import { Button, Card, Dialog, Empty, Loading, More, Notice, Page, PasswordField, Pill, day, when } from "../ui";
+import { Button, Card, Dialog, Loading, More, Notice, Page, PasswordField, Pill, day, when } from "../ui";
 import { Guide } from "./Home";
 
 export default function Settings({ tab }: { tab?: string }) {
   const { me, go } = useApp();
   const tabs = [
     ["profile", "My profile"],
-    me.can.approve || me.can.prepare ? ["approvals", "Approvals"] : null,
     me.can.manage ? ["people", "People and access"] : null,
     me.can.diagnostics ? ["technical", "Technical details"] : null,
     ["help", "Help"],
@@ -23,7 +21,6 @@ export default function Settings({ tab }: { tab?: string }) {
         {tabs.map(([k, l]) => <button key={k} role="tab" aria-selected={cur === k} className={cur === k ? "on" : ""} onClick={() => go(`settings/${k}`)}>{l}</button>)}
       </div>
       {cur === "profile" && <Profile />}
-      {cur === "approvals" && <Approvals />}
       {cur === "people" && <People />}
       {cur === "technical" && <Technical />}
       {cur === "help" && <Help />}
@@ -90,46 +87,6 @@ function Profile() {
   );
 }
 
-function Approvals() {
-  const { me, toast } = useApp();
-  const qc = useQueryClient();
-  const q = useQuery({ queryKey: ["approvals"], queryFn: () => api.get<{ decisions: Decision[] }>("/approvals") });
-  const [note, setNote] = useState<Record<number, string>>({});
-  if (q.isLoading) return <Loading />;
-  const ds = q.data?.decisions ?? [];
-  const check = async (d: Decision, approve: boolean) => {
-    try {
-      const r = await api.post<{ message: string }>(`/decisions/${d.id}/${approve ? "approve" : "reject"}`, { note: note[d.id] });
-      toast(r.message);
-      qc.invalidateQueries({ queryKey: ["approvals"] });
-      qc.invalidateQueries({ queryKey: ["home"] });
-    } catch (e) { toast((e as Error).message, true); }
-  };
-  return (
-    <Card title="Changes waiting for approval" sub="Changes that move money between songs need a second person. The person who proposed a change cannot approve it.">
-      {ds.length === 0 ? <Empty title="Nothing is waiting for approval" /> : (
-        <ul className="list">
-          {ds.map((d) => (
-            <li key={d.id} className="decision">
-              <div>
-                <div className="li-t">{d.text}</div>
-                <div className="muted small">{d.client_code} · proposed by {d.made_by}, {when(d.made_at)}{d.reason ? ` · “${d.reason}”` : ""}</div>
-                <More label="Evidence and original values"><pre className="tech">{JSON.stringify({ evidence: d.evidence, original: d.original }, null, 2)}</pre></More>
-              </div>
-              {me.can.approve && d.can_approve ? (
-                <div className="col">
-                  <input className="input sm" placeholder="Note (optional)" value={note[d.id] ?? ""} onChange={(e) => setNote({ ...note, [d.id]: e.target.value })} />
-                  <div className="row"><Button kind="primary" onClick={() => check(d, true)}>Approve</Button><Button onClick={() => check(d, false)}>Reject</Button></div>
-                </div>
-              ) : <Pill tone="info">{d.made_by_id === me.id ? "You proposed this" : "Waiting for an approver"}</Pill>}
-            </li>
-          ))}
-        </ul>
-      )}
-    </Card>
-  );
-}
-
 type Person = { id: number; email: string; name: string; active: boolean; last_login_at: string | null; roles: string[]; clients: number[] };
 
 function People() {
@@ -145,7 +102,7 @@ function People() {
   const clientText = (p: Person) => p.roles.includes("admin") || p.roles.includes("viewer") ? "All clients"
     : (clients.data ?? []).filter((c) => p.clients.includes(c.id)).map((c) => c.code).join(", ") || "none";
   return (
-    <Card title="People" sub="New accounts start as Viewers: they follow everyone's work and download published reports. Give Preparer to people who upload and process, and Approver to the people who publish. The approver must be a different person from the preparer."
+    <Card title="People" sub="New accounts start as Viewers: they follow everyone's work and download published reports. Give Preparer to the people who upload, process and publish."
           actions={<Button kind="primary" onClick={() => setEditing("new")}>Add a person</Button>}>
       {editing && <PersonDialog key={editing === "new" ? "new" : editing.id} person={editing === "new" ? null : editing}
                                 roles={q.data.roles} clients={clients.data ?? []} onDone={() => setEditing(null)} />}
@@ -256,7 +213,7 @@ function Technical() {
   const d = q.data;
   return (
     <>
-      <Notice>This page is for administrators and approvers. Everyday work never needs it.</Notice>
+      <Notice>This page is for administrators. Everyday work never needs it.</Notice>
       <Card title="Audit record" sub={d.chain.ok ? `Intact - ${d.chain.events} events, each linked to the one before.` : "BROKEN - the audit record was changed."}
             tone={d.chain.ok ? "good" : "bad"}>
         <div className="tbl-wrap short">
@@ -291,7 +248,7 @@ function Help() {
           <dt>Missing song</dt><dd>A song that earned money but whose codes are not in the song list.</dd>
           <dt>Out-of-scope (Not ours)</dt><dd>A song a reviewer marked as belonging to someone else.</dd>
           <dt>Held money</dt><dd>Money that is counted in every total but waits for a person to say which song it belongs to.</dd>
-          <dt>Draft and published</dt><dd>Reports are drafts until an approver - a different person from the one who prepared them - publishes them. Published reports never change.</dd>
+          <dt>Draft and published</dt><dd>Reports are drafts until the preparer publishes them under the next report number. Published reports never change and cannot be deleted.</dd>
         </dl>
       </Card>
     </>

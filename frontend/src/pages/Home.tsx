@@ -2,14 +2,12 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api";
 import { local, useApp } from "../session";
-import type { Decision, RunSummary } from "../types";
+import type { RunSummary } from "../types";
 import { Button, Card, Empty, Loading, RunStatus, when } from "../ui";
 
 type HomeData = {
   next: { kind: string; text: string; run_id?: number };
   runs: RunSummary[]; attention: RunSummary[];
-  approvals: { decisions: Decision[]; builds: { id: number; run_id: number; run_title: string; client_code: string;
-    version: number; submitted_by: string; submitted_at: string; can_approve: boolean; publishing: boolean }[] };
   published: { id: number; generation: string; published_at: string; client_code: string; run_id: number }[];
   can_prepare: boolean; clients: number;
 };
@@ -25,8 +23,8 @@ export function Guide({ onClose }: { onClose?: () => void }) {
         <li><b>Check for issues.</b> We check every statement's totals and tell you, in plain words, if anything needs
           your answer.</li>
         <li><b>Process the data.</b> One button. You can leave the page and come back.</li>
-        <li><b>Download the reports.</b> The master report, the missing-songs report and the out-of-scope report. An
-          approver publishes the final version.</li>
+        <li><b>Preview, publish and download.</b> The master report, the missing-songs report and the out-of-scope
+          report. Publishing saves the final version under the next report number.</li>
       </ol>
     </Card>
   );
@@ -38,8 +36,6 @@ export default function Home() {
   const q = useQuery({ queryKey: ["home"], queryFn: () => api.get<HomeData>("/home"), refetchInterval: 15000 });
   if (q.isLoading || !q.data) return <Loading />;
   const d = q.data;
-  const toApprove = d.approvals.builds.filter((b) => b.can_approve && !b.publishing);
-  const changes = d.approvals.decisions.filter((x) => x.can_approve);
   return (
     <div className="page">
       <section className="hero">
@@ -56,26 +52,6 @@ export default function Home() {
       </section>
 
       {guide && <Guide onClose={() => { local.set("guide.dismissed", "1"); setGuide(false); }} />}
-
-      {me.can.approve && (toApprove.length > 0 || changes.length > 0) && (
-        <Card title="Waiting for your approval" tone="info">
-          <ul className="list">
-            {toApprove.map((b) => (
-              <li key={`b${b.id}`}>
-                <div><b>{b.client_code}</b> · {b.run_title} <span className="muted">(version {b.version}, sent by {b.submitted_by})</span></div>
-                <Button kind="primary" onClick={() => go(`process/${b.run_id}`)}>Review and approve</Button>
-              </li>
-            ))}
-            {changes.slice(0, 6).map((x) => (
-              <li key={`d${x.id}`}>
-                <div>{x.text} <span className="muted">· {x.client_code} · proposed by {x.made_by}</span></div>
-                <Button onClick={() => go("settings/approvals")}>Review</Button>
-              </li>
-            ))}
-          </ul>
-          {changes.length > 6 && <Button kind="ghost" onClick={() => go("settings/approvals")}>See all {changes.length} changes</Button>}
-        </Card>
-      )}
 
       <div className="two">
         <Card title="Recent processing runs" actions={d.runs.length > 0 && me.can.prepare && <Button kind="ghost" onClick={() => go("process")}>Start another</Button>}>

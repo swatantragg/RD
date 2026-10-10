@@ -26,7 +26,7 @@ export function DeleteRunDialog({ runId, title, drafts, onClose, onDone }: {
           setBusy(true);
           try {
             const r = await api.del<{ message: string }>(`/runs/${runId}`);
-            for (const k of ["past", "home", "approvals"]) qc.invalidateQueries({ queryKey: [k] });
+            for (const k of ["past", "home"]) qc.invalidateQueries({ queryKey: [k] });
             qc.removeQueries({ queryKey: ["run", runId] });
             toast(r.message);
             onClose();

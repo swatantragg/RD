@@ -4,6 +4,19 @@ from __future__ import annotations
 from . import __version__
 
 RELEASES: list[dict] = [
+    dict(version="1.0.6", date="10 Oct 2026",
+         summary="In a report preview, the first two columns (for example ISRC and song name) stay in view while you "
+                 "scroll sideways.",
+         points=["Preview: columns A and B are frozen, like frozen panes in Excel."]),
+    dict(version="1.0.5", date="10 Oct 2026",
+         summary="No more approval step: you publish your own reports, and you can preview any report before "
+                 "downloading it.",
+         points=["Publish: on the last step of a run, Publish Reports saves the final version under the next report "
+                 "number (after a short confirmation). Published reports still never change.",
+                 "Review choices that move money (song matches, held money) now apply straight away; process again to "
+                 "see them in the reports.",
+                 "The Approver role and the Approvals page are gone. Approver-only accounts became Viewers.",
+                 "Preview: next to every download, Preview shows the report's sheets and first rows in the browser."]),
     dict(version="1.0.4", date="10 Oct 2026",
          summary="Draft reports can be deleted, so you can start again with the same files, and every drop-down is new.",
          points=["Past Reports → Delete (or Delete run on the run page) removes a run that was never published, with "

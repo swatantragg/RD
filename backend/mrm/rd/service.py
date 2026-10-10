@@ -1,4 +1,4 @@
-"""What the screens do: clients, processing runs, files, checks, builds, review decisions, approval, downloads.
+"""What the screens do: clients, processing runs, files, checks, builds, review decisions, publishing, downloads.
 
 Every function takes the signed-in person (actor), opens one transaction scoped to the clients that person may see,
 checks the person's role, records an audit event and returns plain data for the API. Messages are plain language;
@@ -165,7 +165,7 @@ def close_run(actor: dict, run_id: int) -> None:
         busy = db.scalar(conn, "SELECT count(*) FROM rd_build WHERE run_id = %s AND state IN ('QUEUED','RUNNING') OR "
                                "(run_id = %s AND state = 'SUBMITTED')", (run_id, run_id))
         if busy:
-            raise RDError("This run is being processed or is waiting for approval, so it cannot be closed now.")
+            raise RDError("This run is being processed or published, so it cannot be closed now.")
         conn.execute("UPDATE rd_run SET state = 'ARCHIVED', updated_at = now() WHERE id = %s", (run_id,))
         audit.record(conn, "run.closed", actor, "rd_run", run_id)
 
@@ -180,7 +180,7 @@ def _delete_block(conn, run_id: int) -> str | None:
     if any(b["state"] in ("QUEUED", "RUNNING") for b in bs):
         return "It is being processed. Please wait until that finishes."
     if any(b["state"] == "SUBMITTED" for b in bs):
-        return "It is waiting for approval. Ask the approver to return it first."
+        return "It is being published. Please wait until that finishes."
     return None
 
 
@@ -532,8 +532,6 @@ def run_view(actor: dict, run_id: int) -> dict:
         left_ids = {x["file_id"]: x["reason"] for x in chk["left_out"]}
         builds = db.all(conn, "SELECT id, version, state, created_at, finished_at, generation, error FROM rd_build "
                               "WHERE run_id = %s ORDER BY version DESC", (run_id,))
-        pending = db.scalar(conn, "SELECT count(*) FROM rd_decision WHERE client_id = %s AND state = "
-                                  "'WAITING_APPROVAL'", (run["client_id"],))
         latest = builds[0] if builds else None
         changed = latest is not None and _inputs_sha(conn, run, chk["used"]) != db.scalar(
             conn, "SELECT inputs_sha256 FROM rd_build WHERE id = %s", (latest["id"],))
@@ -556,7 +554,7 @@ def run_view(actor: dict, run_id: int) -> dict:
                                 counts.get("UNSUPPORTED", 0)),
                     issues=chk["issues"], blocked=chk["blocked"], can_process=chk["can_process"],
                     builds=builds, latest_build=latest["id"] if latest else None, changed_since_build=changed,
-                    decisions_waiting=pending, state=_run_state(conn, run, builds, chk),
+                    state=_run_state(conn, run, builds, chk),
                     closed=run["state"] == "ARCHIVED", **_deletable(conn, actor, run_id))
 
 
@@ -578,12 +576,12 @@ def _run_state(conn, run: dict, builds: list[dict], chk: dict) -> dict:
     if b["state"] == "FAILED":
         return dict(code="FAILED", text="Processing failed")
     if b["state"] == "SUBMITTED":
-        return dict(code="WAITING_APPROVAL", text="Waiting for approval")
+        return dict(code="PUBLISHING", text="Publishing")
     if b["state"] in ("PUBLISHED", "SUPERSEDED"):
         return dict(code="PUBLISHED", text=f"Published as {b['generation']}")
     n = db.scalar(conn, "SELECT count(*) FROM rd_issue WHERE build_id = %s AND severity IN ('REVIEW','BLOCKING') AND "
                         "NOT later", (b["id"],))
-    return dict(code="NEEDS_REVIEW", text="Needs your review") if n else dict(code="READY", text="Reports ready")
+    return dict(code="NEEDS_REVIEW", text="Needs your review") if n else dict(code="READY", text="Ready to publish")
 
 
 def list_runs(actor: dict, client_id: int | None = None, limit: int = 20) -> list[dict]:
@@ -657,10 +655,6 @@ def build_view(actor: dict, build_id: int) -> dict:
         reports = db.all(conn, "SELECT id, kind, final, filename, rows, available, reason, totals, bytes, sha256 "
                                "FROM rd_report WHERE build_id = %s ORDER BY final DESC, kind", (build_id,))
         people = {r["id"]: r["name"] for r in db.all(conn, "SELECT id, name FROM app_user")}
-        waiting = db.all(conn, "SELECT * FROM rd_decision WHERE client_id = %s AND state = 'WAITING_APPROVAL' "
-                               "ORDER BY id", (b["client_id"],))
-        applied_after = db.scalar(conn, "SELECT count(*) FROM rd_decision WHERE client_id = %s AND state = 'ACTIVE' "
-                                        "AND moves_money AND checked_at > %s", (b["client_id"], b["created_at"]))
         findings_count = db.scalar(conn, "SELECT count(*) FROM rd_finding WHERE build_id = %s", (build_id,))
         decided = _decided_issue_keys(conn, b["client_id"])
         for i in issues:
@@ -671,30 +665,22 @@ def build_view(actor: dict, build_id: int) -> dict:
         for r in shown:
             r["state"] = _report_state(b, r, is_final)
         blocking = [i for i in issues if i["severity"] == "BLOCKING" and not i["decision"]]
-        can_submit = b["state"] == "CHECKED" and not blocking and access.can(actor, "prepare")
-        can_approve = (b["state"] == "SUBMITTED" and access.can(actor, "approve") and actor["id"] not in
-                       (b["created_by"], b["submitted_by"]) and not b.get("approved_by"))
-        why_not_approve = None
-        if b["state"] == "SUBMITTED" and access.can(actor, "approve") and not can_approve:
-            why_not_approve = "You prepared or submitted this report, so someone else must approve it."
+        can_publish = b["state"] == "CHECKED" and not blocking and access.can(actor, "prepare")
         return dict(id=b["id"], run_id=b["run_id"], run_title=run["title"], version=b["version"], state=b["state"],
                     state_text=_build_state_text(b), client=_client_out(c), stages=b["stages"], error=b["error"],
                     error_detail=b["error_detail"] if access.can(actor, "diagnostics") else None,
                     summary=b["summary"], checks=b["checks"], notices=b["notices"], left_out=b["left_out"],
                     generation=b["generation"], created_by=people.get(b["created_by"]), created_at=b["created_at"],
-                    finished_at=b["finished_at"], submitted_by=people.get(b["submitted_by"]), submitted_at=b["submitted_at"],
-                    approved_by=people.get(b["approved_by"]), published_at=b["published_at"],
-                    returned_reason=b["returned_reason"], issues=[_issue_out(i) for i in issues],
-                    findings=findings_count, reports=shown, can_submit=can_submit, can_approve=can_approve,
-                    why_not_approve=why_not_approve, blocking=len(blocking),
-                    waiting_decisions=[_decision_out(d, people) for d in waiting],
-                    approved_since=applied_after, inputs=b["inputs"],
-                    publishing=b["state"] == "SUBMITTED" and b.get("approved_by") is not None)
+                    finished_at=b["finished_at"], published_by=people.get(b["approved_by"]),
+                    published_at=b["published_at"], returned_reason=b["returned_reason"],
+                    issues=[_issue_out(i) for i in issues], findings=findings_count, reports=shown,
+                    can_publish=can_publish, blocking=len(blocking), inputs=b["inputs"],
+                    publishing=b["state"] == "SUBMITTED")
 
 
 def _build_state_text(b: dict) -> str:
-    return {"QUEUED": "Waiting to start", "RUNNING": "Processing", "CHECKED": "Validated - not yet approved",
-            "FAILED": "Failed - no reports were produced", "SUBMITTED": "Ready for authorised approval",
+    return {"QUEUED": "Waiting to start", "RUNNING": "Processing", "CHECKED": "Validated - ready to publish",
+            "FAILED": "Failed - no reports were produced", "SUBMITTED": "Publishing",
             "PUBLISHED": f"Published as {b['generation']}", "SUPERSEDED": f"Published as {b['generation']} "
             "(a newer version exists)"}[b["state"]]
 
@@ -705,8 +691,8 @@ def _report_state(b: dict, r: dict, final: bool) -> dict:
     if final:
         return dict(code="PUBLISHED", text="Published")
     if b["state"] == "SUBMITTED":
-        return dict(code="AWAITING_APPROVAL", text="Ready for authorised approval (draft)")
-    return dict(code="VALIDATED", text="Validated (draft - not yet approved)")
+        return dict(code="PUBLISHING", text="Publishing (draft)")
+    return dict(code="VALIDATED", text="Validated (draft - not yet published)")
 
 
 def _issue_key(i: dict) -> str:
@@ -717,7 +703,7 @@ def _issue_key(i: dict) -> str:
 def _decided_issue_keys(conn, client_id: int) -> dict:
     out = {}
     for d in db.all(conn, "SELECT id, kind, subject, state, value FROM rd_decision WHERE client_id = %s AND kind IN "
-                          "('LINK','NOT_SAME','ASSIGN_HELD') AND state IN ('ACTIVE','WAITING_APPROVAL') ORDER BY id",
+                          "('LINK','NOT_SAME','ASSIGN_HELD') AND state = 'ACTIVE' ORDER BY id",
                     (client_id,)):
         s = d["subject"]
         kind = {"LINK": "PROPOSAL", "NOT_SAME": "PROPOSAL", "ASSIGN_HELD": "SHARED_RECORDING"}[d["kind"]]
@@ -758,7 +744,8 @@ ACTION_TEXT = {"CONFIRM_MATCH": "Confirm match", "KEEP_SEPARATE": "Keep separate
 
 
 def act(actor: dict, build_id: int, issue_no: int, action: str, payload: dict) -> dict:
-    """A reviewer's answer to one issue. Money-moving answers wait for an approver; the rest apply at once."""
+    """A reviewer's answer to one issue. It applies at once (the newest answer for a song replaces an older one) and
+    reaches the reports when the files are processed again."""
     access.require(actor, "prepare")
     reason = (payload.get("reason") or "").strip() or None
     with access.tx(actor) as conn:
@@ -778,6 +765,7 @@ def act(actor: dict, build_id: int, issue_no: int, action: str, payload: dict) -
             kind = "LINK" if action == "CONFIRM_MATCH" else "NOT_SAME"
             if kind == "LINK" and not reason:
                 reason = "titles and evidence reviewed"
+            _replace_active(conn, b["client_id"], ("LINK", "NOT_SAME"), f"{s['code_kind']}:{s['code']}")
             did = db.insert(conn, "rd_decision", dict(
                 client_id=b["client_id"], kind=kind,
                 subject=dict(code_kind=s["code_kind"], code=s["code"], title=s["title"], isrcs=s["isrcs"],
@@ -790,10 +778,10 @@ def act(actor: dict, build_id: int, issue_no: int, action: str, payload: dict) -
                               base_codes=target.get("isrcs", []) + target.get("work_nos", [])),
                 evidence=dict(score=target.get("score"), why=target.get("why")), reason=reason,
                 source=f"review of build {build_id}", moves_money=(kind == "LINK"),
-                state="WAITING_APPROVAL" if kind == "LINK" else "ACTIVE", made_by=actor["id"], run_id=b["run_id"],
+                state="ACTIVE", made_by=actor["id"], run_id=b["run_id"],
                 build_id=build_id))
             audit.record(conn, f"decision.{kind.lower()}", actor, "rd_decision", did, dict(issue=issue_no))
-            msg = ("Saved. An approver must confirm this before the money moves; then process again."
+            msg = ("Saved. Process the files again to move the money."
                    if kind == "LINK" else "Saved. These songs will be kept separate from now on.")
             return dict(ok=True, decision_id=did, message=msg)
         if i["kind"] == "SHARED_RECORDING" and action == "ASSIGN_HELD":
@@ -803,6 +791,7 @@ def act(actor: dict, build_id: int, issue_no: int, action: str, payload: dict) -
                 raise RDError("Choose the song the money belongs to.")
             anchor_kind = "ISRC" if pick["isrcs"] else "WORK"
             anchor = (pick["isrcs"] or pick["work_nos"])[0]
+            _replace_active(conn, b["client_id"], ("ASSIGN_HELD",), f"ISRC:{s['code']}")
             did = db.insert(conn, "rd_decision", dict(
                 client_id=b["client_id"], kind="ASSIGN_HELD",
                 subject=dict(code_kind="ISRC", code=s["code"], title=s["title"]),
@@ -811,14 +800,19 @@ def act(actor: dict, build_id: int, issue_no: int, action: str, payload: dict) -
                                        (pick["work_nos"] or [anchor])[0], title=pick["title"],
                                        row_key=pick["row_key"])),
                 original=dict(candidates=s["candidates"]), evidence={}, reason=reason or "assigned by reviewer",
-                source=f"review of build {build_id}", moves_money=True, state="WAITING_APPROVAL",
+                source=f"review of build {build_id}", moves_money=True, state="ACTIVE",
                 made_by=actor["id"], run_id=b["run_id"], build_id=build_id))
             audit.record(conn, "decision.assign_held", actor, "rd_decision", did, dict(issue=issue_no))
-            return dict(ok=True, decision_id=did, message="Saved. An approver must confirm this; then process again.")
+            return dict(ok=True, decision_id=did, message="Saved. Process the files again to move the money.")
         if i["kind"] in ("ALREADY_IN_BASE",) and action in ("ADD_AS_SEPARATE", "LEAVE_OUT"):
             choose(actor, b["run_id"], s["file_id"], "SUPPLEMENTARY" if action == "ADD_AS_SEPARATE" else "LEAVE_OUT")
             return dict(ok=True, message="Saved. Process the files again to apply it.")
     raise RDError("That action is not available for this item.")
+
+
+def _replace_active(conn, client_id: int, kinds: tuple, subject_key: str) -> None:
+    conn.execute("UPDATE rd_decision SET state = 'SUPERSEDED' WHERE client_id = %s AND kind = ANY(%s) AND "
+                 "subject_key = %s AND state = 'ACTIVE'", (client_id, list(kinds), subject_key))
 
 
 def set_status(actor: dict, build_id: int, finding_nos: list[int], status: str, note: str | None = None) -> dict:
@@ -872,106 +866,113 @@ def findings(actor: dict, build_id: int, status: str | None = None, q: str | Non
                     statuses=[dict(value=k, label=v) for k, v in rules.STATUS_LABEL.items() if k != rules.NEW])
 
 
-def approvals(actor: dict) -> dict:
-    with access.tx(actor) as conn:
-        people = {r["id"]: r["name"] for r in db.all(conn, "SELECT id, name FROM app_user")}
-        ds = db.all(conn, "SELECT d.*, c.code AS client_code FROM rd_decision d JOIN client c ON c.id = d.client_id "
-                          "WHERE d.state = 'WAITING_APPROVAL' ORDER BY d.id")
-        bs = db.all(conn, "SELECT b.*, c.code AS client_code, r.title AS run_title FROM rd_build b JOIN client c ON "
-                          "c.id = b.client_id JOIN rd_run r ON r.id = b.run_id WHERE b.state = 'SUBMITTED' ORDER BY b.id")
-        return dict(decisions=[dict(_decision_out(d, people), client_code=d["client_code"],
-                                    can_approve=access.can(actor, "approve") and d["made_by"] != actor["id"])
-                               for d in ds],
-                    builds=[dict(id=b["id"], run_id=b["run_id"], run_title=b["run_title"], client_code=b["client_code"],
-                                 version=b["version"], submitted_by=people.get(b["submitted_by"]),
-                                 submitted_at=b["submitted_at"], publishing=b["approved_by"] is not None,
-                                 can_approve=access.can(actor, "approve") and actor["id"] not in
-                                 (b["created_by"], b["submitted_by"])) for b in bs])
-
-
-def check_decision(actor: dict, decision_id: int, approve: bool, note: str | None = None) -> dict:
-    access.require(actor, "approve")
-    with access.tx(actor) as conn:
-        d = db.one(conn, "SELECT * FROM rd_decision WHERE id = %s", (decision_id,))
-        if not d or d["state"] != "WAITING_APPROVAL":
-            raise RDError("This change is not waiting for approval.")
-        if d["made_by"] == actor["id"]:
-            raise Forbidden("You made this change, so someone else must approve it.")
-        if approve:
-            conn.execute("UPDATE rd_decision SET state = 'SUPERSEDED' WHERE client_id = %s AND kind = %s AND "
-                         "subject_key = %s AND state = 'ACTIVE'", (d["client_id"], d["kind"], d["subject_key"]))
-        conn.execute("UPDATE rd_decision SET state = %s, checked_by = %s, checked_at = now(), check_note = %s "
-                     "WHERE id = %s", ("ACTIVE" if approve else "REJECTED", actor["id"], note, decision_id))
-        audit.record(conn, "decision.approved" if approve else "decision.rejected", actor, "rd_decision", decision_id,
-                     dict(note=note))
-    return dict(ok=True, message="Approved. Process the files again to apply it." if approve else "Rejected.")
-
-
-def submit(actor: dict, build_id: int) -> dict:
+def publish(actor: dict, build_id: int) -> dict:
+    """The preparer publishes a validated result: the reports are rebuilt from the same inputs, checked again and
+    saved for good under the next report number (e.g. SVF-RD-SKV9)."""
     access.require(actor, "prepare")
     with access.tx(actor) as conn:
-        b = db.one(conn, "SELECT * FROM rd_build WHERE id = %s", (build_id,))
+        b = db.one(conn, "SELECT * FROM rd_build WHERE id = %s FOR UPDATE", (build_id,))
         if not b or b["state"] != "CHECKED":
-            raise RDError("Only a validated result can be sent for approval.")
+            raise RDError("Only a validated result can be published.")
         blocking = db.scalar(conn, "SELECT count(*) FROM rd_issue WHERE build_id = %s AND severity = 'BLOCKING'",
                              (build_id,))
         if blocking:
             raise RDError("Resolve the items marked 'must be resolved' first, then process again.")
-        conn.execute("UPDATE rd_build SET state = 'SUBMITTED', submitted_by = %s, submitted_at = now(), "
-                     "returned_reason = NULL WHERE id = %s", (actor["id"], build_id))
-        audit.record(conn, "build.submitted", actor, "rd_build", build_id)
-    return dict(ok=True, message="Sent for approval.")
-
-
-def return_build(actor: dict, build_id: int, reason: str) -> dict:
-    access.require(actor, "approve")
-    if not (reason or "").strip():
-        raise RDError("Please say what needs to change.")
-    with access.tx(actor) as conn:
-        b = db.one(conn, "SELECT * FROM rd_build WHERE id = %s", (build_id,))
-        if not b or b["state"] != "SUBMITTED" or b["approved_by"]:
-            raise RDError("This report is not waiting for approval.")
-        conn.execute("UPDATE rd_build SET state = 'CHECKED', returned_reason = %s WHERE id = %s",
-                     (reason.strip(), build_id))
-        audit.record(conn, "build.returned", actor, "rd_build", build_id, dict(reason=reason))
-    return dict(ok=True, message="Returned to the preparer with your note.")
-
-
-def approve_build(actor: dict, build_id: int) -> dict:
-    access.require(actor, "approve")
-    with access.tx(actor) as conn:
-        b = db.one(conn, "SELECT * FROM rd_build WHERE id = %s", (build_id,))
-        if not b or b["state"] != "SUBMITTED" or b["approved_by"]:
-            raise RDError("This report is not waiting for approval.")
-        if actor["id"] in (b["created_by"], b["submitted_by"]):
-            raise Forbidden("You prepared or submitted this report, so someone else must approve it.")
-        conn.execute("UPDATE rd_build SET approved_by = %s, approved_at = now() WHERE id = %s", (actor["id"], build_id))
+        run = _run(conn, b["run_id"])
+        if _inputs_sha(conn, run, run_checks(conn, run, _run_files(conn, run["id"]))["used"]) != b["inputs_sha256"]:
+            raise RDError("Files, answers or review decisions changed after this version was processed. Process the "
+                          "files again, then publish the new version.")
+        conn.execute("UPDATE rd_build SET state = 'SUBMITTED', submitted_by = %(a)s, submitted_at = now(), "
+                     "approved_by = %(a)s, approved_at = now(), returned_reason = NULL WHERE id = %(b)s",
+                     dict(a=actor["id"], b=build_id))
         db.insert(conn, "rd_job", dict(client_id=b["client_id"], build_id=build_id, state="QUEUED"), returning=None)
-        audit.record(conn, "build.approved", actor, "rd_build", build_id)
+        audit.record(conn, "build.publish_requested", actor, "rd_build", build_id)
     from . import jobs
     jobs.wake()
-    return dict(ok=True, message="Approved. The final reports are being prepared.")
+    return dict(ok=True, message="Publishing. The final reports will be ready in a moment.")
+
+def _report_bytes(conn, actor: dict, report_id: int) -> tuple[dict, bytes]:
+    """The stored workbook, after the same checks for a download and a preview."""
+    r = db.one(conn, "SELECT * FROM rd_report WHERE id = %s", (report_id,))
+    if not r:
+        raise Forbidden("This report does not exist, or you do not have access to it.")
+    b = db.one(conn, "SELECT state FROM rd_build WHERE id = %s", (r["build_id"],))
+    if not r["available"]:
+        raise RDError(r["reason"] or "This report is not available.")
+    if not r["final"]:
+        access.require(actor, "draft_download")
+        if b["state"] in ("QUEUED", "RUNNING", "FAILED"):
+            raise RDError("This report is not ready.")
+    data = storage.get("reports", r["object_key"])
+    if hashlib.sha256(data).hexdigest() != r["sha256"]:
+        raise RDError("The stored report does not match its fingerprint. Please contact your administrator.")
+    return r, data
 
 
-# ================================================================== downloads
 def report_file(actor: dict, report_id: int) -> tuple[str, bytes]:
     with access.tx(actor) as conn:
-        r = db.one(conn, "SELECT * FROM rd_report WHERE id = %s", (report_id,))
-        if not r:
-            raise Forbidden("This report does not exist, or you do not have access to it.")
-        b = db.one(conn, "SELECT state FROM rd_build WHERE id = %s", (r["build_id"],))
-        if not r["available"]:
-            raise RDError(r["reason"] or "This report is not available.")
-        if not r["final"]:
-            access.require(actor, "draft_download")
-            if b["state"] in ("QUEUED", "RUNNING", "FAILED"):
-                raise RDError("This report is not ready.")
-        data = storage.get("reports", r["object_key"])
-        if hashlib.sha256(data).hexdigest() != r["sha256"]:
-            raise RDError("The stored report does not match its fingerprint. Please contact your administrator.")
+        r, data = _report_bytes(conn, actor, report_id)
         name = with_person(r["filename"], actor)
         audit.record(conn, "report.downloaded", actor, "rd_report", report_id, dict(file=r["filename"], saved_as=name))
     return name, data
+
+
+PREVIEW_ROWS, PREVIEW_COLS = 300, 60
+
+
+def report_preview(actor: dict, report_id: int, sheet: int = 0) -> dict:
+    """The first rows of one sheet as text, to look at a report before downloading it."""
+    import io
+
+    import openpyxl
+    with access.tx(actor) as conn:
+        r, data = _report_bytes(conn, actor, report_id)
+    wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    try:
+        sheets = [ws for ws in wb.worksheets if ws.sheet_state == "visible"]
+        ws = sheets[max(0, min(sheet, len(sheets) - 1))]
+        rows = []
+        for row in ws.iter_rows(max_row=PREVIEW_ROWS, max_col=PREVIEW_COLS):
+            rows.append([_preview_cell(c) for c in row])
+        width = max((max((i + 1 for i, v in enumerate(row) if v), default=0) for row in rows), default=0)
+        rows = [row[:width] + [""] * (width - len(row)) for row in rows]
+        while rows and not any(rows[-1]):
+            rows.pop()
+        total = ws.max_row or len(rows)
+        out = dict(filename=r["filename"], sheets=[x.title for x in sheets], sheet=sheets.index(ws), rows=rows,
+                   total_rows=total, total_cols=ws.max_column or width, shown_rows=len(rows))
+    finally:
+        wb.close()
+    return out
+
+
+def _preview_cell(c) -> str:
+    v = getattr(c, "value", None)
+    if v is None:
+        return ""
+    if isinstance(v, bool):
+        return "Yes" if v else "No"
+    if isinstance(v, (int, float, Decimal)):
+        fmt = getattr(c, "number_format", "") or ""
+        if "0.0" in fmt or (isinstance(v, float) and not v.is_integer()):
+            return _inr(Decimal(str(v)))
+        return str(int(v))
+    if isinstance(v, (dt.datetime, dt.date)):
+        return v.strftime("%d %b %Y")
+    return str(v)
+
+
+def _inr(v: Decimal) -> str:
+    """12345678.5 -> '1,23,45,678.50' (Indian grouping, two decimals)."""
+    whole, frac = f"{abs(v):.2f}".split(".")
+    if len(whole) > 3:
+        head, tail = whole[:-3], whole[-3:]
+        groups = []
+        while len(head) > 2:
+            groups.insert(0, head[-2:])
+            head = head[:-2]
+        whole = ",".join([head] + groups if head else groups) + "," + tail
+    return ("-" if v < 0 else "") + whole + "." + frac
 
 
 def with_person(filename: str, actor: dict) -> str:
@@ -1001,29 +1002,22 @@ def report_bundle(actor: dict, build_id: int) -> tuple[str, bytes]:
 # ================================================================== home and history
 def home(actor: dict) -> dict:
     runs = list_runs(actor, limit=8)
-    appr = approvals(actor)
     with access.tx(actor) as conn:
         pubs = db.all(conn, "SELECT b.id, b.generation, b.published_at, c.code AS client_code, b.run_id FROM rd_build b "
                             "JOIN client c ON c.id = b.client_id WHERE b.state IN ('PUBLISHED','SUPERSEDED') "
                             "ORDER BY b.published_at DESC LIMIT 6")
         clients = access.client_ids(conn, actor)
-    attention = [r for r in runs if r["state"]["code"] in ("FILES_NEED_ATTENTION", "NEEDS_REVIEW", "FAILED")] \
+    attention = [r for r in runs if r["state"]["code"] in ("FILES_NEED_ATTENTION", "NEEDS_REVIEW", "FAILED", "READY")] \
         if access.can(actor, "prepare") else []                    # a viewer is never asked to act
     nxt = None
-    if access.can(actor, "approve") and any(b["can_approve"] for b in appr["builds"]):
-        n = sum(1 for b in appr["builds"] if b["can_approve"])
-        nxt = dict(kind="APPROVE", text=f"{n} report{'s are' if n != 1 else ' is'} waiting for your approval.")
-    elif access.can(actor, "approve") and any(d["can_approve"] for d in appr["decisions"]):
-        n = sum(1 for d in appr["decisions"] if d["can_approve"])
-        nxt = dict(kind="APPROVE", text=f"{n} change{'s are' if n != 1 else ' is'} waiting for your approval.")
-    elif attention and access.can(actor, "prepare"):
+    if attention and access.can(actor, "prepare"):
         r = attention[0]
         nxt = dict(kind="CONTINUE", run_id=r["id"], text=f"Continue '{r['title']}' - {r['state']['text'].lower()}.")
     elif access.can(actor, "prepare"):
         nxt = dict(kind="NEW_RUN", text="Start a new processing run.")
     else:
         nxt = dict(kind="REPORTS", text="Open Past Reports to download published reports.")
-    return dict(next=nxt, runs=runs, attention=attention, approvals=appr, published=pubs,
+    return dict(next=nxt, runs=runs, attention=attention, published=pubs,
                 can_prepare=access.can(actor, "prepare"), clients=len(clients))
 
 
@@ -1051,7 +1045,7 @@ def past_reports(actor: dict, client_id: int | None = None) -> list[dict]:
                             client_code=b["client_code"], client_name=b["client_name"], version=b["version"],
                             state=b["state"], state_text=_build_state_text(b), generation=b["generation"],
                             published_at=b["published_at"], finished_at=b["finished_at"],
-                            approved_by=people.get(b["approved_by"]), reports=reps,
+                            published_by=people.get(b["approved_by"]), reports=reps,
                             royalty=(b["summary"] or {}).get("royalty"), can_delete=deletable[b["run_id"]]))
         return out
 

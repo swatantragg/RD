@@ -3,8 +3,9 @@ and a worker that dies leaves a visible, retryable failure - never a half-made r
 
 Two kinds of job, told apart by the build's state:
   QUEUED build             -> process: load the run's files, build, check, write the draft reports
-  SUBMITTED + approved_by  -> publish: build again from the same inputs, prove the numbers are identical, write the
-                              final reports under the next generation name (e.g. SVF-RD-SKV9)
+  SUBMITTED + approved_by  -> publish (asked for by the preparer; approved_by holds who published): build again from
+                              the same inputs, prove the numbers are identical, write the final reports under the
+                              next generation name (e.g. SVF-RD-SKV9)
 """
 from __future__ import annotations
 
@@ -167,10 +168,10 @@ def load_inputs(conn, build: dict) -> tuple[engine.RunInput, list[dict], list[di
                                                  note=v.get("note") or "", source=d["source"] or "", ref=d["id"]))
         else:
             inp.decisions.append(engine.Decision(id=d["id"], kind=d["kind"], subject=d["subject"], value=d["value"],
-                                                 approved_by=people.get(d["checked_by"], "")))
+                                                 approved_by=people.get(d["made_by"], "")))
             from .service import _decision_text
             decisions.append(dict(id=d["id"], text=_decision_text(d), made_by=people.get(d["made_by"]),
-                                  approved_by=people.get(d["checked_by"]), reason=d["reason"]))
+                                  reason=d["reason"]))
     return inp, inputs, decisions, dict(client=c, run=run, left_out=chk["left_out"], people=people)
 
 
@@ -295,8 +296,8 @@ def write_reports(res: engine.Result, ctx: dict, build: dict, generation: str, s
     data, meta = excel.master(res, client_code=c["code"], generation=generation, state=state, build_ref=ref,
                               ruleset=rules.RULESET_V1, software=SOFTWARE, inputs=inputs, left_out=ctx["left_out"],
                               decisions=decisions,
-                              people={k: names_.get(build.get(k)) for k in ("created_by", "submitted_by", "approved_by")
-                                      } | {"prepared_by": names_.get(build.get("created_by"))})
+                              people={"prepared_by": names_.get(build.get("created_by")),
+                                      "approved_by": names_.get(build.get("approved_by"))})
     out = dict(checks=[], files=[], meta=meta)
     out["files"].append(dict(kind="MASTER", filename=f"{generation}{suffix}.xlsx", data=data, rows=len(res.rows),
                              available=True, reason=None,
@@ -354,20 +355,16 @@ def _save_reports(build_id: int, client_id: int, reports: dict, final: bool) -> 
 
 # ================================================================== publishing
 def publish(build_id: int, client_id: int, job_id: int) -> bool:
-    """Approved: rebuild from the same inputs, prove the numbers are unchanged, write the final reports."""
+    """Rebuild from the same inputs, prove the numbers are unchanged, write the final reports."""
     try:
         with access.tx(None, client_id) as conn:
             build = db.one(conn, "SELECT * FROM rd_build WHERE id = %s", (build_id,))
             inp, inputs, decisions, ctx = load_inputs(conn, build)
-            if db.scalar(conn, "SELECT count(*) FROM rd_decision WHERE client_id = %s AND state = 'ACTIVE' AND "
-                               "moves_money AND checked_at > %s", (client_id, build["created_at"])):
-                raise PublishRefused("Changes were approved after this version was processed. Process the files "
-                                     "again, then send the new version for approval.")
             from .service import _inputs_sha
             used = run_checks(conn, ctx["run"], _run_files(conn, build["run_id"]))["used"]
             if _inputs_sha(conn, ctx["run"], used) != build["inputs_sha256"]:
                 raise PublishRefused("Files, answers or review decisions changed after this version was processed. "
-                                     "Process the files again, then send the new version for approval.")
+                                     "Process the files again, then publish the new version.")
             c = ctx["client"]
             s = c.get("settings") or {}
             prefix = s.get("output_prefix") or f"{c['code']}-RD-SKV"
@@ -407,8 +404,9 @@ def publish(build_id: int, client_id: int, job_id: int) -> bool:
     except Exception as e:                                       # noqa: BLE001
         log.exception("publish %s", build_id)
         with access.tx(None, client_id) as conn:
-            conn.execute("UPDATE rd_build SET approved_by = NULL, approved_at = NULL, returned_reason = %s WHERE id = %s",
-                         ("Publishing failed - nothing was published. Please approve again; if it happens again, "
+            conn.execute("UPDATE rd_build SET approved_by = NULL, approved_at = NULL, returned_reason = %s, "
+                         "state = 'CHECKED' WHERE id = %s",
+                         ("Publishing failed - nothing was published. Please try again; if it happens again, "
                           "contact your administrator.", build_id))
             audit.record(conn, "build.publish_failed", None, "rd_build", build_id, dict(error=f"{type(e).__name__}: {e}"))
         return False

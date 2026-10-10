@@ -5,7 +5,7 @@ export type ClientRef = { id: number; code: string; name: string };
 export type Release = { version: string; date: string; summary: string; points: string[] };
 export type Me = {
   id: number; email: string; name: string; roles: string[]; role_labels: string[]; csrf: string; version: string;
-  can: { view: boolean; prepare: boolean; approve: boolean; draft_download: boolean; clients: boolean; manage: boolean;
+  can: { view: boolean; prepare: boolean; draft_download: boolean; clients: boolean; manage: boolean;
     diagnostics: boolean };
   clients: ClientRef[]; whats_new: Release[]; member_since: string | null; last_sign_in: string | null;
 };

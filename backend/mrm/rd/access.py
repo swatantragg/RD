@@ -9,23 +9,21 @@ from .. import db
 from ..security import Forbidden
 
 ROLE_LABEL = {"admin": "Administrator", "importer": "Preparer", "rights_reviewer": "Reviewer",
-              "accounts": "Accounts", "approver": "Approver", "viewer": "Viewer", "sender": "Sender"}
+              "accounts": "Accounts", "viewer": "Viewer"}
 
 CAN = {
-    "view": ("admin", "importer", "rights_reviewer", "accounts", "approver", "viewer", "sender"),
-    "prepare": ("admin", "importer", "rights_reviewer", "accounts"),     # upload, process, review, propose
-    "approve": ("approver",),                                            # approve decisions and publish
-    "draft_download": ("admin", "importer", "rights_reviewer", "accounts", "approver"),
+    "view": ("admin", "importer", "rights_reviewer", "accounts", "viewer"),
+    "prepare": ("admin", "importer", "rights_reviewer", "accounts"),     # upload, process, review, publish
+    "draft_download": ("admin", "importer", "rights_reviewer", "accounts"),
     "clients": ("admin", "importer", "rights_reviewer", "accounts"),     # add a client, edit its settings
     "manage": ("admin",),                                                # people, grants, switching a client off
-    "diagnostics": ("admin", "approver"),
+    "diagnostics": ("admin",),
 }
 WHY = {"prepare": "preparing reports needs the Preparer role",
-       "approve": "only an Approver can approve",
-       "draft_download": "draft reports can only be downloaded by the people preparing or approving them",
+       "draft_download": "draft reports can only be downloaded by the people preparing them",
        "clients": "adding or changing clients needs the Preparer or Administrator role",
        "manage": "only an Administrator can do this",
-       "diagnostics": "technical details are for Administrators and Approvers"}
+       "diagnostics": "technical details are for Administrators"}
 
 
 def can(actor: dict, what: str) -> bool:
@@ -39,7 +37,7 @@ def require(actor: dict, what: str) -> None:
 
 def client_ids(conn, actor: dict) -> list[int]:
     """Administrators and Viewers see every client (a Viewer follows everyone's work and downloads published reports);
-    preparers and approvers see the clients they were given."""
+    preparers see the clients they were given."""
     roles = actor.get("roles", ())
     if "admin" in roles or "viewer" in roles:
         return [r["id"] for r in db.all(conn, "SELECT id FROM client ORDER BY id")]
