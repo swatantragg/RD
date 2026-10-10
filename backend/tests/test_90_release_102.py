@@ -18,8 +18,8 @@ def test_versions_agree_and_notes_exist():
 
 def test_unseen_notes():
     assert [r["version"] for r in releases.unseen(None)] == [__version__]
-    assert [r["version"] for r in releases.unseen("1.0.2")] == ["1.0.3"]
-    assert [r["version"] for r in releases.unseen("1.0.0")] == ["1.0.3", "1.0.2", "1.0.1"]
+    assert [r["version"] for r in releases.unseen("1.0.2")] == ["1.0.4", "1.0.3"]
+    assert [r["version"] for r in releases.unseen("1.0.0")] == ["1.0.4", "1.0.3", "1.0.2", "1.0.1"]
     assert releases.unseen(__version__) == []
 
 

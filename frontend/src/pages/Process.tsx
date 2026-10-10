@@ -3,7 +3,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { local, useApp } from "../session";
 import type { Build, FileOut, Run } from "../types";
-import { Button, Card, FileStatus, Loading, Money, More, Notice, Page, Steps } from "../ui";
+import { DeleteRunDialog } from "../DeleteRun";
+import { Button, Card, FileStatus, Loading, Money, More, Notice, Page, Select, Steps } from "../ui";
 import { ProcessStep, ReviewStep, DownloadStep } from "./Results";
 
 export const STEPS = ["Select client", "Upload files", "Check files", "Process data", "Review results", "Download reports"];
@@ -53,10 +54,9 @@ function SelectClient() {
               </label>
             )}
             <label className="field">Client
-              <select className="input" value={cid ?? ""} onChange={(e) => setCid(Number(e.target.value) || undefined)} required>
-                {me.clients.length > 1 && <option value="">Choose a client…</option>}
-                {shown.map((c) => <option key={c.id} value={c.id}>{c.name} ({c.code})</option>)}
-              </select>
+              <Select value={cid ? String(cid) : ""} required placeholder="Choose a client…"
+                      onChange={(v) => setCid(Number(v) || undefined)}
+                      options={shown.map((c) => ({ value: String(c.id), label: c.name, meta: c.code }))} />
             </label>
             <More label="Name this run (optional)">
               <label className="field">Run name
@@ -86,7 +86,7 @@ function naturalStep(run: Run, build: Build | undefined): number {
 }
 
 function RunWizard({ runId }: { runId: number }) {
-  const { me } = useApp();
+  const { me, go } = useApp();
   const readOnly = !me.can.prepare;
   const [view, setView] = useState<number | null>(null);
   const run = useQuery({
@@ -117,7 +117,12 @@ function RunWizard({ runId }: { runId: number }) {
     prevState.current = s;
   }, [build.data?.state, qc, runId]);
   if (run.isLoading) return <Loading />;
-  if (run.isError || !run.data) return <Page title="Process Files"><Notice tone="bad">{(run.error as Error)?.message ?? "Not found"}</Notice></Page>;
+  if (run.isError || !run.data) return (
+    <Page title="Process Files">
+      <Notice tone="bad">{(run.error as Error)?.message ?? "Not found"}</Notice>
+      {me.can.prepare && <div className="actions"><Button kind="primary" onClick={() => go("process")}>Start a new run</Button></div>}
+    </Page>
+  );
   const r = run.data;
   const b = bid ? build.data : undefined;
   const natural = naturalStep(r, b);
@@ -128,6 +133,7 @@ function RunWizard({ runId }: { runId: number }) {
           actions={<>
             <Button kind="ghost" onClick={() => setView(null)} disabled={view === null}>Go to current step</Button>
             {!r.closed && <CloseRun runId={r.id} />}
+            {r.can_delete && <DeleteRun run={r} />}
           </>}>
       <Steps steps={STEPS} current={step} done={done} onPick={(i) => setView(i === natural ? null : i)} />
       {readOnly && <Notice>{me.can.approve
@@ -153,6 +159,18 @@ function CloseRun({ runId }: { runId: number }) {
       try { await api.post(`/runs/${runId}/close`); toast("Run closed. Its files and reports are kept."); go(""); }
       catch (e) { toast((e as Error).message, true); }
     }}>Close this run</Button>
+  );
+}
+
+function DeleteRun({ run }: { run: Run }) {
+  const { go } = useApp();
+  const [ask, setAsk] = useState(false);
+  return (
+    <>
+      <Button kind="danger" onClick={() => setAsk(true)}>Delete run</Button>
+      {ask && <DeleteRunDialog runId={run.id} title={run.title} onClose={() => setAsk(false)} onDone={() => go("process")}
+                               drafts={run.builds.filter((b) => b.state === "CHECKED").length} />}
+    </>
   );
 }
 
@@ -348,11 +366,8 @@ function FileQuestions({ run, file }: { run: Run; file: FileOut }) {
           {questions.map((q) => (
             <label key={q.field} className="field">{q.message}{!q.required && <span className="muted"> (optional)</span>}
               {q.options.length > 0 ? (
-                <select className="input" value={answers[q.field] ?? ""} required={q.required}
-                        onChange={(e) => setAnswers({ ...answers, [q.field]: e.target.value })}>
-                  <option value="">Choose…</option>
-                  {q.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                </select>
+                <Select value={answers[q.field] ?? ""} required={q.required} options={q.options}
+                        onChange={(v) => setAnswers({ ...answers, [q.field]: v })} />
               ) : q.field === "period" ? (
                 <PeriodInput onChange={(v) => setAnswers({ ...answers, period: v })} />
               ) : (

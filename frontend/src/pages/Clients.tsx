@@ -3,7 +3,12 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { local, useApp } from "../session";
 import type { Client } from "../types";
-import { Button, Card, Dialog, Empty, Loading, More, Notice, Page, RemoveButton, day } from "../ui";
+import { Button, Card, Dialog, Empty, Loading, More, Notice, Page, RemoveButton, Select, day, type Option } from "../ui";
+
+const CURRENCIES: Option[] = [{ value: "INR", label: "INR", hint: "Indian rupee" }, { value: "USD", label: "USD", hint: "US dollar" },
+  { value: "EUR", label: "EUR", hint: "Euro" }, { value: "GBP", label: "GBP", hint: "British pound" }];
+const BASIS: Option[] = [{ value: "GROSS", label: "Gross revenue", hint: "Before deductions" },
+  { value: "NET", label: "Net revenue", hint: "After deductions" }];
 
 export default function Clients({ start }: { start?: string }) {
   const { me, go } = useApp();
@@ -132,12 +137,11 @@ function ClientDialog({ client, onDone }: { client: Client | null; onDone: (crea
             {dists.map((d, i) => (
               <div key={i} className="row-line">
                 <input className="input grow" value={d.name} placeholder="Distributor (e.g. MRM)" aria-label="Distributor" onChange={(e) => setDist(i, { name: e.target.value })} />
-                <select className="input" value={d.currency} aria-label="Currency" onChange={(e) => setDist(i, { currency: e.target.value })}>
-                  <option>INR</option><option>USD</option><option>EUR</option><option>GBP</option>
-                </select>
-                <select className="input" value={d.basis} aria-label="Revenue basis" onChange={(e) => setDist(i, { basis: e.target.value })}>
-                  <option value="GROSS">Gross revenue</option><option value="NET">Net revenue</option>
-                </select>
+                <Select className="w-cur" value={d.currency} label="Currency" onChange={(v) => setDist(i, { currency: v })}
+                        options={CURRENCIES.some((c) => c.value === d.currency) ? CURRENCIES
+                          : [...CURRENCIES, { value: d.currency, label: d.currency }]} />
+                <Select className="w-basis" value={d.basis} label="Revenue basis" options={BASIS}
+                        onChange={(v) => setDist(i, { basis: v })} />
                 <RemoveButton label="Remove this distributor" onClick={() => setDists(dists.filter((_, k) => k !== i))} />
               </div>
             ))}

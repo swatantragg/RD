@@ -135,6 +135,8 @@ def _run(conn, run_id: int) -> dict:
     r = db.one(conn, "SELECT * FROM rd_run WHERE id = %s", (run_id,))
     if not r:
         raise RDError("This processing run does not exist, or you do not have access to it.")
+    if r["state"] == "DELETED":
+        raise RDError("This processing run was deleted.")
     return r
 
 
@@ -143,10 +145,13 @@ def create_run(actor: dict, client_id: int, title: str | None = None) -> dict:
     with access.tx(actor, client_id) as conn:
         c = _client(conn, client_id)
         title = (title or "").strip() or f"{c['code']} - {dt.date.today().strftime('%d %b %Y')}"
-        same = db.scalar(conn, "SELECT count(*) FROM rd_run WHERE client_id = %s AND (title = %s OR title LIKE %s)",
-                         (client_id, title, title + " (%"))
-        if same:
-            title = f"{title} ({same + 1})"           # runs must be told apart on the Home screen
+        taken = {r["title"] for r in db.all(conn, "SELECT title FROM rd_run WHERE client_id = %s AND state <> 'DELETED' "
+                                                    "AND (title = %s OR title LIKE %s)", (client_id, title, title + " (%"))}
+        if title in taken:                            # runs must be told apart on the Home screen
+            n = 2
+            while f"{title} ({n})" in taken:
+                n += 1
+            title = f"{title} ({n})"
         rid = db.insert(conn, "rd_run", dict(client_id=client_id, title=title, created_by=actor["id"]))
         audit.record(conn, "run.created", actor, "rd_run", rid, dict(client=c["code"], title=title))
     return run_view(actor, rid)
@@ -163,6 +168,40 @@ def close_run(actor: dict, run_id: int) -> None:
             raise RDError("This run is being processed or is waiting for approval, so it cannot be closed now.")
         conn.execute("UPDATE rd_run SET state = 'ARCHIVED', updated_at = now() WHERE id = %s", (run_id,))
         audit.record(conn, "run.closed", actor, "rd_run", run_id)
+
+
+def _delete_block(conn, run_id: int) -> str | None:
+    """Why a run cannot be deleted, or None when it can."""
+    bs = db.all(conn, "SELECT state, generation FROM rd_build WHERE run_id = %s ORDER BY version FOR UPDATE", (run_id,))
+    published = [b["generation"] for b in bs if b["state"] in ("PUBLISHED", "SUPERSEDED")]
+    if published:
+        return (f"It holds the published report {', '.join(published)}. Published reports are kept for good; you can "
+                f"close the run instead.")
+    if any(b["state"] in ("QUEUED", "RUNNING") for b in bs):
+        return "It is being processed. Please wait until that finishes."
+    if any(b["state"] == "SUBMITTED" for b in bs):
+        return "It is waiting for approval. Ask the approver to return it first."
+    return None
+
+
+def delete_run(actor: dict, run_id: int) -> dict:
+    """Deletes a run that was never published: the run and its draft reports disappear from every list. The uploaded
+    files stay stored (added to a new run, the same copy is used) and review decisions stay with the client. Rows are
+    marked, not erased, so the audit trail stays complete."""
+    access.require(actor, "prepare")
+    with access.tx(actor) as conn:
+        conn.execute("SELECT id FROM rd_run WHERE id = %s FOR UPDATE", (run_id,))     # one delete at a time
+        run = _run(conn, run_id)
+        why = _delete_block(conn, run_id)
+        if why:
+            raise RDError(f"This run cannot be deleted. {why}")
+        drafts = db.scalar(conn, "SELECT count(*) FROM rd_build WHERE run_id = %s", (run_id,))
+        conn.execute("UPDATE rd_run SET state = 'DELETED', deleted_at = now(), deleted_by = %s, updated_at = now() "
+                     "WHERE id = %s", (actor["id"], run_id))
+        conn.execute("UPDATE rd_report SET available = FALSE, reason = 'This report was deleted with its run.' WHERE "
+                     "NOT final AND build_id IN (SELECT id FROM rd_build WHERE run_id = %s)", (run_id,))
+        audit.record(conn, "run.deleted", actor, "rd_run", run_id, dict(title=run["title"], drafts=drafts))
+    return dict(ok=True, message=f"'{run['title']}' and its draft reports were deleted.")
 
 
 def add_file(actor: dict, run_id: int, filename: str, data: bytes) -> dict:
@@ -518,7 +557,14 @@ def run_view(actor: dict, run_id: int) -> dict:
                     issues=chk["issues"], blocked=chk["blocked"], can_process=chk["can_process"],
                     builds=builds, latest_build=latest["id"] if latest else None, changed_since_build=changed,
                     decisions_waiting=pending, state=_run_state(conn, run, builds, chk),
-                    closed=run["state"] == "ARCHIVED")
+                    closed=run["state"] == "ARCHIVED", **_deletable(conn, actor, run_id))
+
+
+def _deletable(conn, actor: dict, run_id: int) -> dict:
+    if not access.can(actor, "prepare"):
+        return dict(can_delete=False, delete_note=None)
+    why = _delete_block(conn, run_id)
+    return dict(can_delete=why is None, delete_note=why)
 
 
 def _run_state(conn, run: dict, builds: list[dict], chk: dict) -> dict:
@@ -985,10 +1031,11 @@ def past_reports(actor: dict, client_id: int | None = None) -> list[dict]:
     with access.tx(actor) as conn:
         bs = db.all(conn, "SELECT b.*, c.code AS client_code, c.name AS client_name, r.title AS run_title FROM rd_build b "
                           "JOIN client c ON c.id = b.client_id JOIN rd_run r ON r.id = b.run_id "
-                          "WHERE b.state IN ('PUBLISHED','SUPERSEDED','CHECKED','SUBMITTED') "
+                          "WHERE b.state IN ('PUBLISHED','SUPERSEDED','CHECKED','SUBMITTED') AND r.state <> 'DELETED' "
                           "AND (%(c)s::BIGINT IS NULL OR b.client_id = %(c)s) ORDER BY coalesce(b.published_at, "
                           "b.finished_at) DESC LIMIT 100", dict(c=client_id))
         people = {r["id"]: r["name"] for r in db.all(conn, "SELECT id, name FROM app_user")}
+        deletable = {rid: _deletable(conn, actor, rid)["can_delete"] for rid in {b["run_id"] for b in bs}}
         out = []
         for b in bs:
             reps = db.all(conn, "SELECT id, kind, final, filename, available, reason, rows FROM rd_report WHERE "
@@ -1005,7 +1052,7 @@ def past_reports(actor: dict, client_id: int | None = None) -> list[dict]:
                             state=b["state"], state_text=_build_state_text(b), generation=b["generation"],
                             published_at=b["published_at"], finished_at=b["finished_at"],
                             approved_by=people.get(b["approved_by"]), reports=reps,
-                            royalty=(b["summary"] or {}).get("royalty")))
+                            royalty=(b["summary"] or {}).get("royalty"), can_delete=deletable[b["run_id"]]))
         return out
 
 

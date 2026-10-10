@@ -2,10 +2,10 @@
 
 | | |
 |---|---|
-| Date | 9 October 2026 · **version 1.0.3** (1.0.1: accounts, no demo data, light/dark theme, wider layout · 1.0.2: add clients, one-time What's new note, profile menu, My profile · 1.0.3: client and people pop-ups, removable rows, delete people without work, password confirmation, restyled drop-downs, `purge-demo`) |
+| Date | 10 October 2026 · **version 1.0.4** (1.0.1: accounts, no demo data, light/dark theme, wider layout · 1.0.2: add clients, one-time What's new note, profile menu, My profile · 1.0.3: client and people pop-ups, removable rows, delete people without work, password confirmation, restyled drop-downs, `purge-demo` · 1.0.4: delete a run that was never published, with its drafts; the app's own drop-down lists; panel-style expandable sections) |
 | Builds on | `ARCHITECTURE-V3.md` (technical foundation), `PHASE-1-AUDIT-AND-PLAN.md` (audit and questions), flowchart approval draft v1.0 |
 | Business decisions applied | answers of 9 October 2026 (§8) |
-| Test status | 83 automated tests pass (62 new, 21 from the earlier comparison module); browser walkthroughs of the whole workflow (two people, light and dark theme; profile menu, What's new, adding a client); container stack smoke test |
+| Test status | 85 automated tests pass (64 new, 21 from the earlier comparison module); browser walkthroughs of the whole workflow (two people, light and dark theme; profile menu, What's new, adding a client); container stack smoke test |
 
 Contents: 1 What the system does · 2 Updated flowchart · 3 Architecture · 4 Data model · 5 Rules (money, matching,
 classification) · 6 The three reports · 7 Validation against the reference workbooks · 8 Business decisions applied ·
@@ -263,8 +263,9 @@ All figures below are asserted by automated tests (`tests/test_50…`, `test_60�
 | 11 | Non-SVF report | **Implemented · Tested** (34/34 vs reference). Any automatic rule is **awaiting business clarification** (Q4) |
 | 12 | Secure downloads | **Implemented · Tested** (role, client, published/draft, sha256 re-check) |
 | 13 | Processing history and versions | **Implemented · Tested** (Past Reports; SKV9 → SKV10; superseded kept; published rows locked) |
-| 14 | Automated tests | **83 passing** |
+| 14 | Automated tests | **85 passing** |
 | — | 1.0.3: client add/edit in a pop-up (fixes the edit form keeping the previous client's values) with removable rows; people add/edit in a pop-up, delete only without recorded work; new password confirmed; themed drop-downs and expandable sections; one-time `purge-demo` clean-up | **Implemented · Tested** (`test_95_release_103.py`, browser walkthrough) |
+| — | 1.0.4: **Delete** a run that was never published (Past Reports or the run page), with its draft reports. The run is marked deleted (migration `0005_run_delete.sql`), hidden from every list and refused by every action; its rows, files and audit events stay. Refused while it is processing or waiting for approval, and always once anything in it was published. Uploaded files are reused when added to a new run; review decisions stay with the client. Every drop-down is the app's own list (`Select` in `ui.tsx`: themed, tick on the current choice, status colours, keyboard: arrows, Home/End, Enter, Esc, first letters); expandable sections are bordered panels | **Implemented · Tested** (`test_96_release_104.py`, browser walkthrough) |
 | — | 1.0.2: preparers add clients (SVF kept; the adder gets access; admin switches clients off); one-time What's new note per person and version (stored on the server); initials profile menu (profile, role, theme, sign out); My profile (name, password) | **Implemented · Tested** (`test_90_release_102.py`, browser walkthrough) |
 | — | Accounts (1.0.1): self sign-up (first = administrator, later = viewer), show-password, viewers follow everyone's work and download only published files named with their name; demo accounts and sample files removed | **Implemented · Tested** (`test_80_accounts.py`, browser walkthrough) |
 | 15–20 | Architecture documentation, updated flowchart, setup, deployment, known limitations, outstanding decisions | **This guide** and `README.md` |

@@ -1,4 +1,5 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent as KeyEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { download as dl } from "./api";
 import { money, type Num, isBlank } from "./format";
 
@@ -172,7 +173,7 @@ export function Dialog({ title, sub, onClose, children, wide }: {
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const prev = document.activeElement as HTMLElement | null;
-    const first = box.current?.querySelector<HTMLElement>("input:not([disabled]), select, textarea, button");
+    const first = box.current?.querySelector<HTMLElement>("input:not([disabled]):not([tabindex='-1']), textarea, button");
     first?.focus();
     const esc = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     document.addEventListener("keydown", esc);
@@ -198,4 +199,128 @@ export function Dialog({ title, sub, onClose, children, wide }: {
 /** Small round '×' used to remove a row. */
 export function RemoveButton({ label, onClick }: { label: string; onClick: () => void }) {
   return <button type="button" className="icon-btn row-x" aria-label={label} title={label} onClick={onClick}>×</button>;
+}
+
+export type Option = { value: string; label: string; hint?: string; meta?: string; tone?: Tone };
+
+/** The app's own drop-down list (a select-only combobox): styled in both themes, a tick on the current choice, keyboard
+ *  support (arrows, Home/End, Enter, Esc, first letters). Focus stays on the button while the list is open. */
+export function Select({ value, options, onChange, placeholder = "Choose…", label, size, required, disabled, className }: {
+  value: string; options: Option[]; onChange: (v: string) => void; placeholder?: string; label?: string;
+  size?: "sm"; required?: boolean; disabled?: boolean; className?: string;
+}) {
+  const id = useId();
+  const btn = useRef<HTMLButtonElement>(null);
+  const list = useRef<HTMLUListElement>(null);
+  const typed = useRef({ text: "", at: 0 });
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(0);
+  const [pos, setPos] = useState<CSSProperties>({});
+  const current = options.findIndex((o) => o.value === value);
+  const shown = current >= 0 ? options[current] : undefined;
+  const last = options.length - 1;
+
+  function place() {
+    const r = btn.current?.getBoundingClientRect();
+    if (!r) return;
+    const width = Math.min(Math.max(r.width, 280), window.innerWidth - 16);
+    const left = Math.max(8, Math.min(r.left, window.innerWidth - width - 8));
+    const below = window.innerHeight - r.bottom - 14, above = r.top - 14;
+    const want = Math.min(options.length * 46 + 14, 360);
+    setPos(below < want && above > below
+      ? { left, width, bottom: window.innerHeight - r.top + 6, maxHeight: Math.min(360, above) }
+      : { left, width, top: r.bottom + 6, maxHeight: Math.min(360, below) });
+  }
+  function show(at = current) {
+    if (disabled || !options.length) return;
+    place();
+    setActive(Math.max(0, Math.min(at, last)));
+    setOpen(true);
+  }
+  function pick(i: number) {
+    setOpen(false);
+    btn.current?.focus();
+    const o = options[i];
+    if (o && o.value !== value) onChange(o.value);
+  }
+  function seek(ch: string): number {
+    const t = typed.current, now = Date.now();
+    t.text = now - t.at < 700 ? t.text + ch.toLowerCase() : ch.toLowerCase();
+    t.at = now;
+    const from = open ? active : Math.max(current, 0);
+    const start = t.text.length === 1 ? from + 1 : from;
+    for (let k = 0; k < options.length; k++) {
+      const i = (start + k) % options.length;
+      if (options[i].label.toLowerCase().startsWith(t.text)) return i;
+    }
+    return -1;
+  }
+  function key(e: KeyEvent) {
+    if (e.key.length === 1 && e.key !== " " && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      const i = seek(e.key);
+      if (i >= 0) { if (open) setActive(i); else show(i); }
+      return;
+    }
+    if (!open) {
+      if (["ArrowDown", "ArrowUp", "Enter", " "].includes(e.key)) { e.preventDefault(); show(); }
+      return;
+    }
+    const to = { ArrowDown: Math.min(last, active + 1), ArrowUp: Math.max(0, active - 1), Home: 0, End: last,
+      PageDown: Math.min(last, active + 8), PageUp: Math.max(0, active - 8) }[e.key];
+    if (to !== undefined) { e.preventDefault(); setActive(to); }
+    else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(active); }
+    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setOpen(false); }     // not the pop-up
+    else if (e.key === "Tab") setOpen(false);
+  }
+
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: PointerEvent) => {
+      const t = e.target as Node;
+      if (!btn.current?.contains(t) && !list.current?.contains(t)) setOpen(false);
+    };
+    const move = (e: Event) => { if (!(e.target instanceof Node && list.current?.contains(e.target))) place(); };
+    document.addEventListener("pointerdown", away, true);
+    window.addEventListener("scroll", move, true);
+    window.addEventListener("resize", move);
+    return () => {
+      document.removeEventListener("pointerdown", away, true);
+      window.removeEventListener("scroll", move, true);
+      window.removeEventListener("resize", move);
+    };
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (open) list.current?.children[active]?.scrollIntoView({ block: "nearest" });
+  }, [open, active]);
+
+  return (
+    <span className={`select ${size ?? ""} ${className ?? ""}`}>
+      <button ref={btn} type="button" role="combobox" className={`input select-btn ${size ?? ""} ${open ? "open" : ""}`}
+              aria-haspopup="listbox" aria-expanded={open} aria-controls={`${id}-list`} aria-label={label}
+              aria-activedescendant={open ? `${id}-${active}` : undefined} aria-required={required || undefined}
+              disabled={disabled} onClick={() => (open ? setOpen(false) : show())} onKeyDown={key}>
+        {shown?.tone && <span className={`dot ${shown.tone}`} aria-hidden />}
+        <span className={`select-val ${shown ? "" : "placeholder"}`}>{shown ? shown.label : placeholder}</span>
+        {shown?.meta && <span className="select-meta">{shown.meta}</span>}
+        <span className="select-chev" aria-hidden />
+      </button>
+      {required && <input className="select-req" tabIndex={-1} aria-hidden required value={value} onChange={() => undefined}
+                          onFocus={() => btn.current?.focus()} />}
+      {open && createPortal(
+        <ul ref={list} id={`${id}-list`} role="listbox" aria-label={label} className="select-list" style={pos}>
+          {options.map((o, i) => (
+            <li key={o.value} id={`${id}-${i}`} role="option" aria-selected={o.value === value}
+                className={`select-opt ${i === active ? "active" : ""} ${o.value === value ? "on" : ""}`}
+                onPointerMove={() => i !== active && setActive(i)} onPointerDown={(e) => e.preventDefault()}
+                onClick={() => pick(i)}>
+              {o.tone && <span className={`dot ${o.tone}`} aria-hidden />}
+              <span className="select-opt-t">{o.label}{o.hint && <span className="select-opt-h">{o.hint}</span>}</span>
+              {o.meta && <span className="select-meta">{o.meta}</span>}
+              <span className="select-tick" aria-hidden />
+            </li>
+          ))}
+        </ul>,
+        btn.current?.closest(".modal") ?? document.body)}
+    </span>
+  );
 }

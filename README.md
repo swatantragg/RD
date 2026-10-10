@@ -65,13 +65,19 @@ docker compose run --rm api python -m mrm.cli purge-demo --keep you@company.com
 
 Click your **initials** (top right) for your profile, role, the **Light / Dark** theme and sign out; **Settings → My
 profile** changes your name or password. After each update a one-time **What's new** note sums up the changes (once per
-person, on any browser). The version is shown in the footer (**V1.0.3**).
+person, on any browser). The version is shown in the footer (**V1.0.4**).
 
 **Clients:** SVF is set up already. Preparers and administrators add more under **Clients → Add a client** (or **Add a
 new client** in step 1 of a run): a short code (used in report names, e.g. `ACME-RD-SKV1`), the name and the rights
 holders (society member numbers) whose statements belong to the client. **Edit** on a client opens the same pop-up
 with all its details; any row can be removed with ×. The person who adds a client can work on it straight away;
 switching a client off is for administrators.
+
+**Starting again:** a run that was never published can be deleted with its draft reports (**Past Reports → Delete**,
+or **Delete run** on the run page). Upload the same files to a new run: the stored copies are reused, so nothing is
+counted twice, and review decisions stay with the client. Published reports are never deleted; a run that is
+processing or waiting for approval must finish or be returned first. A deleted run is only hidden: its history stays
+in the database and the audit log.
 
 **People** (Settings → People and access): **Add a person** and **Edit** open a pop-up for role and client access. An
 account with no recorded work can be **deleted**; anyone who uploaded, prepared, approved or decided something can only
@@ -84,7 +90,7 @@ procedure in the system guide (§13–14).
 |---|---|
 | Home | What to do next, recent runs and their status, items waiting for you, published reports |
 | Process Files | The guided run: 1 Select client · 2 Upload files · 3 Check files · 4 Process data · 5 Review results · 6 Download reports |
-| Past Reports | Every published version, with its three downloads; drafts for preparers and approvers |
+| Past Reports | Every published version, with its three downloads; drafts for preparers and approvers; delete a never-published run |
 | Clients | Rights holders, report naming, platform-report distributors; add a client (administrator) |
 | Settings | Approvals · People and access · Technical details (administrators, approvers) · Help |
 
@@ -98,7 +104,7 @@ docker run -d --name mrm-devdb -e POSTGRES_PASSWORD=devroot -e POSTGRES_DB=mrm \
 cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/python -m mrm.cli bootstrap            # migrations and client SVF (no demo data)
 .venv/bin/uvicorn mrm.api.app:app --port 8010     # API with an in-process worker thread
-.venv/bin/python -m pytest                        # 83 tests, on a throw-away database
+.venv/bin/python -m pytest                        # 85 tests, on a throw-away database
 
 cd ../frontend && npm install && API_URL=http://127.0.0.1:8010 npm run dev    # UI on :5173
 ```
@@ -109,6 +115,7 @@ Main tests:
 |---|---|
 | `tests/test_50_rd_parsing.py` | S-1 and S-16 in detail; all 45 statements reconcile; file-name metadata; file kinds; blank, zero and negative amounts; review-status vocabulary; edited previous reports |
 | `tests/test_60_rd_reports.py` | Book-once; held shared recordings; title proposals and decisions; already-in-previous-report; FY split; rounding; money kinds kept apart; master vs SKV8 (structure and per-distribution totals); Non-SVF vs reference (34/34); Missing Songs rule; byte-identical exports; Excel review round trip |
+| `tests/test_96_release_104.py` | Deleting a never-published run (preparers only, once); same title and same file in a new run; refused while waiting for approval and after publication |
 | `tests/test_95_release_103.py` | Deleting people only without recorded work (admin only, never yourself); new password typed twice; `purge-demo` moves work, deletes demo accounts, keeps the audit chain intact |
 | `tests/test_90_release_102.py` | Adding clients (preparers; duplicates refused; switching off is admin-only); the one-time What's new note; My profile (name, password); backend, frontend and release-note versions agree |
 | `tests/test_80_accounts.py` | Sign-up rules and the on/off switch; first account administers, later accounts view; viewer downloads only published files, named with their name; old demo accounts cannot sign in |
@@ -121,7 +128,8 @@ backend/mrm/rd/          the royalty platform: rules, names, parsers, detect, en
                          store, service, jobs, access
 backend/mrm/api/         routes_auth (sign-in), routes_rd (the platform); routes_admin / intake / identity / results
                          = the earlier comparison module, mounted at /api/compare only when LEGACY_COMPARISON=true
-backend/mrm/migrations/  0001-0002 (earlier module, audit chain), 0003_rd_platform (this platform), 0004_profile
+backend/mrm/migrations/  0001-0002 (earlier module, audit chain), 0003_rd_platform (this platform), 0004_profile,
+                         0005_run_delete
 backend/mrm/releases.py  release notes shown once after each update (add an entry with every version change)
 frontend/src/            Home, Process (guided run), Results (process / review / download), Past Reports,
                          Clients, Settings

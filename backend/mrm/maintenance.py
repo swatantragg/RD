@@ -20,7 +20,8 @@ LEGACY_TABLES = ("batch", "source_file", "publishing_line", "recording_line", "u
                  "identity_version_link", "rule_version", "comparison_run", "comparison_group", "run_exception",
                  "report_pack", "enquiry_case", "case_event")
 REASSIGN = [  # table, column, trigger that protects the row
-    ("rd_file", "uploaded_by", "rd_file_guard"), ("rd_run", "created_by", None), ("rd_run_file", "added_by", None),
+    ("rd_file", "uploaded_by", "rd_file_guard"), ("rd_run", "created_by", None), ("rd_run", "deleted_by", None),
+    ("rd_run_file", "added_by", None),
     ("rd_build", "created_by", "rd_build_guard"), ("rd_build", "submitted_by", "rd_build_guard"),
     ("rd_build", "approved_by", "rd_build_guard"), ("rd_decision", "made_by", "rd_decision_guard"),
     ("rd_decision", "checked_by", "rd_decision_guard")]

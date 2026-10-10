@@ -64,6 +64,11 @@ def close_run(rid: int, a: dict = Depends(actor)):
     return J({"ok": True})
 
 
+@router.delete("/runs/{rid}")
+def delete_run(rid: int, a: dict = Depends(actor)):
+    return J(service.delete_run(a, rid))
+
+
 @router.post("/runs/{rid}/files")
 async def upload(rid: int, files: list[UploadFile] = File(...), a: dict = Depends(actor)):
     access.require(a, "prepare")

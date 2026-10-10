@@ -9,7 +9,7 @@ applyTheme(currentTheme());
 
 const client = new QueryClient({
   defaultOptions: {
-    queries: { refetchOnWindowFocus: false, retry: (n, e: any) => e?.status !== 401 && e?.status !== 403 && n < 1, staleTime: 5_000 },
+    queries: { refetchOnWindowFocus: false, retry: (n, e: any) => (!e?.status || e.status >= 500) && n < 1, staleTime: 5_000 },
   },
 });
 

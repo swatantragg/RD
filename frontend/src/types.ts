@@ -32,6 +32,7 @@ export type Run = {
   files: FileOut[]; counts: { total: number; ready: number; needs_review: number; left_out: number; error: number };
   issues: RunIssue[]; blocked: string[]; can_process: boolean; builds: BuildRef[]; latest_build: number | null;
   changed_since_build: boolean; decisions_waiting: number; state: State; closed: boolean;
+  can_delete: boolean; delete_note: string | null;
 };
 
 export type RunSummary = {

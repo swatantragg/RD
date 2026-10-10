@@ -4,7 +4,7 @@ import { api, qs } from "../api";
 import { money } from "../format";
 import { useApp } from "../session";
 import type { Build, Finding, Issue, Report, Run } from "../types";
-import { Button, Card, DownloadButton, Empty, Loading, Money, More, Notice, Pill, when } from "../ui";
+import { Button, Card, DownloadButton, Empty, Loading, Money, More, Notice, Pill, Select, when, type Option, type Tone } from "../ui";
 
 // ================================================================== step 4: process
 export function ProcessStep({ run, build, onStarted }: { run: Run; build: Build | undefined; onStarted: () => void }) {
@@ -304,6 +304,9 @@ function MatchCard({ build, issue }: { build: Build; issue: Issue }) {
   );
 }
 
+const STATUS_TONE: Record<string, Tone> = { NEEDS_CHECK: "warn", IDENTIFIER_TO_UPDATE: "info", CONFIRMED_MISSING: "bad",
+  ALREADY_IN_LIST: "good", NOT_OURS: "neutral" };
+
 function Findings({ build }: { build: Build }) {
   const { me, toast } = useApp();
   const qc = useQueryClient();
@@ -318,6 +321,8 @@ function Findings({ build }: { build: Build }) {
   });
   const counts = data.data?.counts ?? {};
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
+  const statusOptions: Option[] = (data.data?.statuses ?? []).map((s) => ({ ...s, tone: STATUS_TONE[s.value] ?? "neutral" }));
+  const rowOptions: Option[] = [{ value: "", label: "Not reviewed" }, ...statusOptions];
   const save = async (nos: number[], st: string) => {
     try {
       const r = await api.post<{ message: string }>(`/builds/${build.id}/findings/status`, { findings: nos, status: st });
@@ -348,10 +353,8 @@ function Findings({ build }: { build: Build }) {
       {me.can.prepare && sel.length > 0 && (
         <div className="bulk">
           <span>{sel.length} selected</span>
-          <select className="input" value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Status for selected songs">
-            <option value="">Set status…</option>
-            {data.data?.statuses.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
-          </select>
+          <Select value={status} onChange={setStatus} placeholder="Set status…" label="Status for selected songs"
+                  options={statusOptions} />
           <Button kind="primary" disabled={!status} onClick={() => save(sel, status)}>Apply</Button>
         </div>
       )}
@@ -375,11 +378,8 @@ function Findings({ build }: { build: Build }) {
                   <td className="small">{f.proposal ? <>{f.proposal.title} <span className="muted">({[...(f.proposal.isrcs ?? []).slice(0, 1), ...(f.proposal.work_nos ?? []).slice(0, 1)].join(" · ")})</span></> : <span className="muted">none</span>}</td>
                   <td>
                     {me.can.prepare ? (
-                      <select className="input sm" value={f.status === "NEW" ? "" : f.status} aria-label={`Status of ${f.title}`}
-                              onChange={(e) => e.target.value && save([f.no], e.target.value)}>
-                        <option value="">Not reviewed</option>
-                        {data.data!.statuses.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
-                      </select>
+                      <Select size="sm" value={f.status === "NEW" ? "" : f.status} label={`Status of ${f.title}`}
+                              options={rowOptions} onChange={(v) => v && save([f.no], v)} />
                     ) : f.status_text}
                     {f.status_original && f.status_original !== f.status_text && <div className="muted small">“{f.status_original}”</div>}
                   </td>
