@@ -4,6 +4,7 @@ import { api, qs } from "../api";
 import { useApp } from "../session";
 import { DeleteRunDialog } from "../DeleteRun";
 import { ReportPreview } from "../ReportPreview";
+import { ResetFilters } from "../parts";
 import { Button, Card, DownloadButton, Empty, Loading, Money, Page, Pill, Select, when } from "../ui";
 
 type Entry = {
@@ -23,8 +24,8 @@ export default function PastReports() {
   const q = useQuery({ queryKey: ["past", client], queryFn: () => api.get<Entry[]>(`/past-reports${qs({ client_id: client })}`) });
   const list = (q.data ?? []).filter((e) => drafts || e.state === "PUBLISHED" || e.state === "SUPERSEDED");
   return (
-    <Page title="Past Reports" intro={<>Every published report is kept. A newer version never overwrites an older one.
-      {me.can.prepare && " Drafts that were never published can be deleted, to start again with the same files."}</>}>
+    <Page title="Reports"
+          actions={me.can.prepare && <Button kind="primary" onClick={() => go("process")}>New processing run</Button>}>
       <div className="toolbar">
         {me.clients.length > 1 && (
           <label className="field inline">Client
@@ -36,6 +37,7 @@ export default function PastReports() {
         {me.can.draft_download && (
           <label className="check"><input type="checkbox" checked={drafts} onChange={(e) => setDrafts(e.target.checked)} /> Include drafts not yet published</label>
         )}
+        <ResetFilters active={client !== "" || drafts} onReset={() => { setClient(""); setDrafts(false); }} />
       </div>
       {q.isLoading ? <Loading /> : list.length === 0 ? (
         <Card><Empty title="No reports yet">Published reports appear here once they are published.</Empty></Card>

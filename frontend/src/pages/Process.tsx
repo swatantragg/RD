@@ -199,7 +199,7 @@ function UploadStep({ run, onNext, onBusy }: { run: Run; onNext: () => void; onB
   }
   return (
     <>
-      <Card title="Upload your files" sub="Royalty statements, platform reports, the client's song list, a previous master report - all together.">
+      <Card title="Upload your files">
         <div className={`drop ${over ? "over" : ""}`} role="button" tabIndex={0}
              onClick={() => input.current?.click()} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && input.current?.click()}
              onDragOver={(e) => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)}

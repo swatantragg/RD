@@ -5,18 +5,31 @@ from . import db
 
 
 def record(conn, action: str, actor: dict | None = None, object_kind: str | None = None, object_id=None,
-           detail: dict | None = None) -> None:
+           detail: dict | None = None, before: dict | None = None, after: dict | None = None) -> None:
+    """One audit event, in the caller's transaction. The actor's role at the time, and the state before and after a
+    change, travel in the detail. Never pass passwords, hashes, tokens or session secrets."""
+    d = dict(detail or {})
+    if actor and (actor.get("role") or actor.get("roles")):
+        d.setdefault("actor_role", actor.get("role") or actor["roles"][0])
+    if before is not None:
+        d["before"] = before
+    if after is not None:
+        d["after"] = after
     db.insert(conn, "audit_event", dict(id=0, at="now", actor_id=(actor or {}).get("id"),
                                         actor=(actor or {}).get("email") or (actor or {}).get("name") or "system",
                                         action=action, object_kind=object_kind,
                                         object_id=None if object_id is None else str(object_id),
-                                        detail=detail or {}, prev_hash="", hash=""), returning=None)
+                                        detail=d, prev_hash="", hash=""), returning=None)
 
 
-def recent(conn, limit: int = 300, before_id: int | None = None, kind: str | None = None) -> list[dict]:
+def recent(conn, limit: int = 300, before_id: int | None = None, kind: str | None = None,
+           prefixes: list[str] | None = None, q: str | None = None) -> list[dict]:
     return db.all(conn, "SELECT id, at, actor, action, object_kind, object_id, detail, hash FROM audit_event "
                         "WHERE (%(b)s::BIGINT IS NULL OR id < %(b)s) AND (%(k)s::TEXT IS NULL OR object_kind = %(k)s) "
-                        "ORDER BY id DESC LIMIT %(n)s", dict(b=before_id, k=kind, n=limit))
+                        "AND (%(p)s::TEXT[] IS NULL OR split_part(action, '.', 1) = ANY(%(p)s)) "
+                        "AND (%(q)s::TEXT IS NULL OR actor ILIKE %(q)s OR action ILIKE %(q)s OR object_id = %(qq)s) "
+                        "ORDER BY id DESC LIMIT %(n)s",
+                  dict(b=before_id, k=kind, n=limit, p=prefixes, q=f"%{q}%" if q else None, qq=q))
 
 
 def verify_chain(conn) -> dict:

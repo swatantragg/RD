@@ -3,10 +3,13 @@ import { api, setCsrf } from "./api";
 
 export type ClientRef = { id: number; code: string; name: string };
 export type Release = { version: string; date: string; summary: string; points: string[] };
+export type Role = "SUPER_ADMIN" | "ADMIN" | "USER";
+export type Capability = "view" | "prepare" | "draft_download" | "clients" | "manage" | "diagnostics" | "platforms"
+  | "verify_mappings" | "approve_enquiries" | "assign_followups" | "close_enquiries" | "audit" | "reset_passwords"
+  | "settings" | "clear_statements" | "clear_catalogue";
 export type Me = {
-  id: number; email: string; name: string; roles: string[]; role_labels: string[]; csrf: string; version: string;
-  can: { view: boolean; prepare: boolean; draft_download: boolean; clients: boolean; manage: boolean;
-    diagnostics: boolean };
+  id: number; email: string; name: string; role: Role; role_label: string; roles: string[]; role_labels: string[];
+  must_change_password: boolean; csrf: string; version: string; can: Record<Capability, boolean>;
   clients: ClientRef[]; whats_new: Release[]; member_since: string | null; last_sign_in: string | null;
 };
 
@@ -22,6 +25,8 @@ export function initials(name: string): string {
 type Ctx = {
   me: Me; route: string; go: (r: string) => void; toast: (msg: string, bad?: boolean) => void; signOut: () => void;
   refreshMe: () => Promise<void>;
+  /** The client the work pages show (remembered per browser; only a convenience). */
+  clientId: number | undefined; setClientId: (id: number) => void; client: ClientRef | undefined;
 };
 const C = createContext<Ctx | null>(null);
 export const useApp = () => useContext(C)!;
@@ -50,8 +55,11 @@ export function AppProvider({ me, setMe, onSignOut, children }: {
     const m = await loadMe();
     if (m) setMe(m);
   }, [setMe]);
+  const [picked, setPicked] = useState<number | undefined>(() => Number(local.get("client")) || undefined);
+  const client = me.clients.find((c) => c.id === picked) ?? me.clients[0];
+  const setClientId = useCallback((id: number) => { local.set("client", String(id)); setPicked(id); }, []);
   return (
-    <C.Provider value={{ me, route, go, toast, signOut: onSignOut, refreshMe }}>
+    <C.Provider value={{ me, route, go, toast, signOut: onSignOut, refreshMe, clientId: client?.id, setClientId, client }}>
       {children}
       {note && <div className={`toast ${note.bad ? "bad" : ""}`} role="status" aria-live="polite">{note.msg}</div>}
     </C.Provider>

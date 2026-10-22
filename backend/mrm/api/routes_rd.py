@@ -7,7 +7,7 @@ from fastapi import APIRouter, Body, Depends, File, UploadFile
 from fastapi.responses import Response
 from starlette.concurrency import run_in_threadpool
 
-from .. import audit, config, db, security
+from .. import config
 from ..normalize import s
 from ..rd import access, service
 from .deps import J, actor
@@ -166,96 +166,7 @@ def download_all(bid: int, a: dict = Depends(actor)):
     return _attachment(name, data, "application/zip")
 
 
-# ------------------------------------------------------------------ settings: people, access, diagnostics
-@router.get("/people")
-def people(a: dict = Depends(actor)):
-    access.require(a, "manage")
-    with db.tx() as conn:
-        rows = db.all(conn, "SELECT u.id, u.email, u.name, u.active, u.last_login_at, coalesce(array_agg(DISTINCT r.role) "
-                            "FILTER (WHERE r.role IS NOT NULL), '{}') AS roles, coalesce(array_agg(DISTINCT g.client_id) "
-                            "FILTER (WHERE g.client_id IS NOT NULL), '{}') AS clients FROM app_user u LEFT JOIN user_role "
-                            "r ON r.user_id = u.id LEFT JOIN client_grant g ON g.user_id = u.id GROUP BY u.id "
-                            "ORDER BY u.name")
-    return J(dict(people=rows, roles=[dict(value=k, label=v) for k, v in access.ROLE_LABEL.items()]))
-
-
-@router.post("/people")
-def add_person(body: dict = Body(...), a: dict = Depends(actor)):
-    access.require(a, "manage")
-    from ..seed import create_user
-    roles = [r for r in body.get("roles") or [] if r in security.ROLES]
-    email, name, pw = s(body.get("email")).lower(), s(body.get("name")), body.get("password") or ""
-    if not email or not name or not roles:
-        raise service.RDError("A person needs an email, a name and at least one role.")
-    if len(pw) < 10:
-        raise service.RDError("The first password must be at least 10 characters.")
-    with db.tx() as conn:
-        uid = create_user(conn, email, name, roles, pw)
-        for cid in body.get("clients") or []:
-            conn.execute("INSERT INTO client_grant (user_id, client_id, granted_by) VALUES (%s, %s, %s) ON CONFLICT "
-                         "DO NOTHING", (uid, int(cid), a["id"]))
-        audit.record(conn, "user.created", a, "app_user", uid, dict(email=email, roles=roles,
-                                                                    clients=body.get("clients") or []))
-    return J({"id": uid})
-
-
-@router.patch("/people/{uid}")
-def update_person(uid: int, body: dict = Body(...), a: dict = Depends(actor)):
-    access.require(a, "manage")
-    with db.tx() as conn:
-        if "roles" in body:
-            roles = [r for r in body["roles"] if r in security.ROLES]
-            if uid == a["id"] and "admin" not in roles:
-                raise service.RDError("You cannot remove your own administrator role.")
-            conn.execute("DELETE FROM user_role WHERE user_id = %s", (uid,))
-            for r in roles:
-                conn.execute("INSERT INTO user_role (user_id, role) VALUES (%s, %s)", (uid, r))
-        if "clients" in body:
-            conn.execute("DELETE FROM client_grant WHERE user_id = %s", (uid,))
-            for cid in body["clients"]:
-                conn.execute("INSERT INTO client_grant (user_id, client_id, granted_by) VALUES (%s, %s, %s)",
-                             (uid, int(cid), a["id"]))
-        if "active" in body:
-            if uid == a["id"] and not body["active"]:
-                raise service.RDError("You cannot switch off your own account.")
-            conn.execute("UPDATE app_user SET active = %s WHERE id = %s", (bool(body["active"]), uid))
-            if not body["active"]:
-                conn.execute("UPDATE app_session SET revoked_at = now() WHERE user_id = %s AND revoked_at IS NULL",
-                             (uid,))
-        if s(body.get("password")):
-            if len(body["password"]) < 10:
-                raise service.RDError("A password must be at least 10 characters.")
-            conn.execute("UPDATE app_user SET password_hash = %s WHERE id = %s",
-                         (security.hash_password(body["password"]), uid))
-        audit.record(conn, "user.updated", a, "app_user", uid,
-                     {k: v for k, v in body.items() if k != "password"} | ({"password": "changed"}
-                                                                           if body.get("password") else {}))
-    return J({"ok": True})
-
-
-@router.delete("/people/{uid}")
-def delete_person(uid: int, a: dict = Depends(actor)):
-    """Delete an account that has no recorded work. Anyone who uploaded, prepared, published or decided something stays
-    (switched off), so every report remains traceable to a person."""
-    import psycopg
-    access.require(a, "manage")
-    if uid == a["id"]:
-        raise service.RDError("You cannot delete your own account.")
-    with db.tx() as conn:
-        u = db.one(conn, "SELECT email FROM app_user WHERE id = %s", (uid,))
-        if not u:
-            raise service.RDError("This person does not exist.")
-        try:
-            with conn.transaction():
-                conn.execute("UPDATE client_grant SET granted_by = NULL WHERE granted_by = %s", (uid,))
-                conn.execute("DELETE FROM app_user WHERE id = %s", (uid,))
-        except psycopg.errors.ForeignKeyViolation:
-            raise service.RDError(f"{u['email']} has uploaded, prepared, published or decided something, so the account "
-                                  "must stay to keep that history traceable. Switch it off instead.") from None
-        audit.record(conn, "user.deleted", a, "app_user", uid, dict(email=u["email"]))
-    return J({"ok": True})
-
-
+# ------------------------------------------------------------------ diagnostics
 @router.get("/diagnostics")
 def diagnostics(a: dict = Depends(actor)):
     return J(service.diagnostics(a))

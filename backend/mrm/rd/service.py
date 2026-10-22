@@ -1053,8 +1053,9 @@ def past_reports(actor: dict, client_id: int | None = None) -> list[dict]:
 def diagnostics(actor: dict, limit: int = 200) -> dict:
     access.require(actor, "diagnostics")
     with access.tx(actor) as conn:
-        events = audit.recent(conn, limit=limit)
-        chain = audit.verify_chain(conn)
+        full = access.can(actor, "audit")              # the activity log is the Super Admin's
+        events = audit.recent(conn, limit=limit) if full else []
+        chain = audit.verify_chain(conn) if full else None
         failed = db.all(conn, "SELECT b.id, b.run_id, b.version, b.error, b.error_detail, b.finished_at, c.code FROM "
                               "rd_build b JOIN client c ON c.id = b.client_id WHERE b.state = 'FAILED' ORDER BY b.id "
                               "DESC LIMIT 20")

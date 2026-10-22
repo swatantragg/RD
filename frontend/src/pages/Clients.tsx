@@ -22,7 +22,7 @@ export default function Clients({ start }: { start?: string }) {
     else if (start === "new") go("clients");
   };
   return (
-    <Page title="Clients" intro="Each client has its own rights holders, report names and settings. Their data is never mixed."
+    <Page title="Clients"
           actions={me.can.clients && <Button kind="primary" onClick={() => setEditing("new")}>Add a client</Button>}>
       {editing && <ClientDialog key={editing === "new" ? "new" : editing.id} client={editing === "new" ? null : editing} onDone={close} />}
       {list.length === 0 ? <Card><Empty title="No clients">{me.can.clients ? "Add the first client." : "Ask your administrator for access."}</Empty></Card> : (
@@ -51,7 +51,7 @@ type Holder = { member_no: string; name: string };
 type Distributor = Client["distributors"][number];
 
 /** Add a client, or edit one, in a pop-up. Rows can be added and removed; nothing is saved until 'Save'. */
-function ClientDialog({ client, onDone }: { client: Client | null; onDone: (created?: boolean) => void }) {
+export function ClientDialog({ client, onDone }: { client: Client | null; onDone: (created?: boolean, id?: number) => void }) {
   const { me, toast, refreshMe } = useApp();
   const qc = useQueryClient();
   const [f, setF] = useState({
@@ -77,12 +77,13 @@ function ClientDialog({ client, onDone }: { client: Client | null; onDone: (crea
           const body: Record<string, unknown> = { ...f, holders: holders.filter((h) => h.member_no.trim() && h.name.trim()),
             remove_holders: remove, distributors: dists.filter((d) => d.name.trim()) };
           if (client && me.can.manage && active !== client.active) body.active = active;
+          let made: Client | null = null;
           if (client) await api.patch(`/clients/${client.id}`, body);
-          else local.set("client", String((await api.post<Client>("/clients", body)).id));   // preselected in step 1
+          else local.set("client", String((made = await api.post<Client>("/clients", body)).id));   // preselected in step 1
           await qc.invalidateQueries({ queryKey: ["clients"] });
           await refreshMe();
           toast(client ? "Saved." : `Client ${f.code} added. You can now process files for it.`);
-          onDone(!client);
+          onDone(!client, made?.id);
         } catch (x) { toast((x as Error).message, true); } finally { setBusy(false); }
       }}>
         <div className="form-grid">

@@ -23,10 +23,16 @@ class J(Response):
         super().__init__(db.dumps(content).encode("utf-8"), status_code=status_code)
 
 
+# what a person signed in with a temporary password may still do: read who they are, change it, sign out
+TEMPORARY_OK = {("GET", "/api/auth/me"), ("PATCH", "/api/me"), ("POST", "/api/auth/logout")}
+
+
 def actor(request: Request) -> dict:
     a = security.load_session(request.cookies.get(COOKIE))
     if not a:
         raise Unauthorized("sign in first")
+    if a.get("must_change_password") and (request.method, request.url.path) not in TEMPORARY_OK:
+        raise security.Forbidden("Please change your temporary password before you continue.")
     return a
 
 

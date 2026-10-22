@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent as KeyEvent, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent as KeyEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { download as dl } from "./api";
 import { money, type Num, isBlank } from "./format";
@@ -322,5 +322,69 @@ export function Select({ value, options, onChange, placeholder = "Choose…", la
         </ul>,
         btn.current?.closest(".modal") ?? document.body)}
     </span>
+  );
+}
+
+/** A wide table: a second scroll bar on top, kept in step with the one at the bottom, and hold-and-drag to scroll
+ *  (sideways and down). A press that does not move is still a normal click. */
+export function ScrollX({ children, className, label }: { children: ReactNode; className?: string; label?: string }) {
+  const box = useRef<HTMLDivElement>(null);
+  const top = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(0);
+  const [over, setOver] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  useLayoutEffect(() => {
+    const b = box.current;
+    if (!b) return;
+    const measure = () => { setWidth(b.scrollWidth); setOver(b.scrollWidth > b.clientWidth + 1); };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(b);
+    Array.from(b.children).forEach((c) => ro.observe(c));
+    const mo = new MutationObserver(() => { Array.from(b.children).forEach((c) => ro.observe(c)); measure(); });
+    mo.observe(b, { childList: true });
+    return () => { ro.disconnect(); mo.disconnect(); };
+  }, []);
+  const sync = (from: HTMLDivElement | null, to: HTMLDivElement | null) => {
+    if (from && to && Math.abs(to.scrollLeft - from.scrollLeft) > 0.5) to.scrollLeft = from.scrollLeft;
+  };
+  const press = (e: React.PointerEvent<HTMLDivElement>) => {
+    const b = box.current;
+    if (!b || e.button !== 0 || e.pointerType !== "mouse") return;
+    if ((e.target as HTMLElement).closest("input, textarea, select, button, a, label, [role='combobox'], [contenteditable]")) return;
+    e.preventDefault();                                   // a drag scrolls; it does not select text
+    const x0 = e.clientX, y0 = e.clientY, l0 = b.scrollLeft, t0 = b.scrollTop;
+    let moved = false;
+    const move = (ev: PointerEvent) => {
+      const dx = ev.clientX - x0, dy = ev.clientY - y0;
+      if (!moved && Math.abs(dx) < 5 && Math.abs(dy) < 5) return;
+      if (!moved) { moved = true; setDragging(true); window.getSelection()?.removeAllRanges(); }
+      b.scrollLeft = l0 - dx;
+      b.scrollTop = t0 - dy;
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      if (moved) {
+        setDragging(false);
+        const stop = (ev: MouseEvent) => { ev.stopPropagation(); ev.preventDefault(); };
+        window.addEventListener("click", stop, { capture: true, once: true });
+        window.setTimeout(() => window.removeEventListener("click", stop, { capture: true }), 0);
+      }
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+  return (
+    <div className="scrollx">
+      <div ref={top} className={`scrollx-top ${over ? "" : "off"}`} aria-hidden onScroll={() => sync(top.current, box.current)}>
+        <div style={{ width }} />
+      </div>
+      <div ref={box} className={`tbl-wrap ${className ?? ""} ${over ? "grab" : ""} ${dragging ? "dragging" : ""}`}
+           tabIndex={over ? 0 : undefined} role={over ? "region" : undefined} aria-label={over ? label ?? "Table (scrolls sideways)" : undefined}
+           onScroll={() => sync(box.current, top.current)} onPointerDown={press}>
+        {children}
+      </div>
+    </div>
   );
 }

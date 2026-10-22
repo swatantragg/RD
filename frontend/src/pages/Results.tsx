@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, qs } from "../api";
+import { ResetFilters } from "../parts";
 import { money } from "../format";
 import { useApp } from "../session";
 import type { Build, Finding, Issue, Report, Run } from "../types";
@@ -346,6 +347,7 @@ function Findings({ build }: { build: Build }) {
           ))}
         </div>
         <input className="input" placeholder="Find a song, ISRC or work number" value={q} onChange={(e) => setQ(e.target.value)} />
+        <ResetFilters active={filter !== "NEW" || !!q} onReset={() => { setFilter("NEW"); setQ(""); setSel([]); }} />
       </div>
       {me.can.prepare && sel.length > 0 && (
         <div className="bulk">

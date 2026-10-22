@@ -10,14 +10,15 @@ from fastapi.responses import JSONResponse, Response
 from .. import __version__, config, db
 from ..rd.service import RDError
 from ..security import Forbidden
-from . import routes_auth, routes_rd
+from . import routes_admin, routes_auth, routes_rd, routes_recon
 from .deps import COOKIE, Unauthorized
 
 logging.basicConfig(level=config.settings.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("mrm.api")
 
-app = FastAPI(title="Royalty Processing Platform", version=__version__, docs_url="/api/docs",
-              openapi_url="/api/openapi.json", redoc_url=None)
+app = FastAPI(title="Royalty Processing Platform", version=__version__, redoc_url=None,
+              docs_url="/api/docs" if config.settings.api_docs else None,
+              openapi_url="/api/openapi.json" if config.settings.api_docs else None)
 
 
 @app.middleware("http")
@@ -85,3 +86,5 @@ def _start_worker():
 
 app.include_router(routes_auth.router, prefix="/api")
 app.include_router(routes_rd.router, prefix="/api")
+app.include_router(routes_recon.router, prefix="/api")
+app.include_router(routes_admin.router, prefix="/api")

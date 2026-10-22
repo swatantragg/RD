@@ -1,25 +1,16 @@
 # Royalty Reports - database, one-shot bootstrap (migrations + first client), API, background worker and web.
-#   docker compose up -d --build        then open http://localhost:8080
+#   cp backend/.env.example backend/.env    then put strong passwords in it (see the file)
+#   docker compose up -d --build            then open http://localhost:8080
+# Every secret and setting comes from backend/.env; without that file nothing starts.
 name: mrm
-
-x-backend-env: &backend-env
-  DATABASE_URL: postgresql://mrm_app:${MRM_APP_PASSWORD:-mrm-app-dev}@db:5432/mrm
-  MIGRATOR_DATABASE_URL: postgresql://mrm_owner:${MRM_OWNER_PASSWORD:-mrm-owner-dev}@db:5432/mrm
-  SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
-  STORAGE_ROOT: /data/objects
-  ALLOW_SIGNUP: ${ALLOW_SIGNUP:-true}
-  COOKIE_SECURE: ${COOKIE_SECURE:-auto}
-  LOG_LEVEL: INFO
 
 services:
   db:
     image: postgres:16-alpine
+    env_file: ./backend/.env                  # POSTGRES_PASSWORD, MRM_OWNER_PASSWORD, MRM_APP_PASSWORD
     environment:
       POSTGRES_DB: mrm
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres-dev}
-      MRM_OWNER_PASSWORD: ${MRM_OWNER_PASSWORD:-mrm-owner-dev}
-      MRM_APP_PASSWORD: ${MRM_APP_PASSWORD:-mrm-app-dev}
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./deploy/postgres/init.sh:/docker-entrypoint-initdb.d/10-init.sh:ro
@@ -33,7 +24,9 @@ services:
   bootstrap:
     build: ./backend
     command: ["python", "-m", "mrm.cli", "bootstrap"]
-    environment: *backend-env
+    env_file: ./backend/.env
+    environment:
+      STORAGE_ROOT: /data/objects
     volumes:
       - objects:/data/objects
     depends_on:
@@ -42,8 +35,9 @@ services:
 
   api:
     build: ./backend
+    env_file: ./backend/.env
     environment:
-      <<: *backend-env
+      STORAGE_ROOT: /data/objects
       RD_WORKER: "off"                        # processing runs in the worker service below
     volumes:
       - objects:/data/objects
@@ -54,7 +48,9 @@ services:
   worker:
     build: ./backend
     command: ["python", "-m", "mrm.cli", "worker"]
-    environment: *backend-env
+    env_file: ./backend/.env
+    environment:
+      STORAGE_ROOT: /data/objects
     volumes:
       - objects:/data/objects
     depends_on:
@@ -66,7 +62,7 @@ services:
   web:
     build: ./frontend
     ports:
-      - "${WEB_PORT:-8080}:80"
+      - "${WEB_BIND:-127.0.0.1}:${WEB_PORT:-8080}:80"   # this computer only; WEB_BIND=0.0.0.0 opens it to the network
     depends_on:
       api: { condition: service_healthy }
     restart: unless-stopped

@@ -196,12 +196,65 @@ def _find(hdr: list[str], names: tuple) -> int | None:
     return None
 
 
+def _numbered(h: str) -> str:
+    """'isrc 1', 'isrc-2', 'isrc (3)', 'iprs song code 1' -> the heading without its number."""
+    return re.sub(r"(\s*(no\.?|#)?\s*\(?\d{1,2}\)?)+$", "", h).strip()
+
+
+_CODEISH = re.compile(r"\b(code|codes|no|no\.|nos|number|numbers|num|id|int)\b")
+
+
+def _is_isrc_h(h: str) -> bool:
+    return bool(re.search(r"\bisrcs?\b", h) or re.match(r"isrcs?\d", h)) and "upc" not in h
+
+
+def _is_work_h(h: str) -> bool:
+    """IPRS work numbers go by many names: 'Internal No', 'Work No', 'IPRS Song Code 1', 'IPRS Work Code',
+    'Tune Code' … A serial number ('S.No', 'Sr No') is not one."""
+    if _is_isrc_h(h) or any(w in h for w in ("upc", "album", "isrc", "date", "language")):
+        return False
+    b = _numbered(h)
+    if b in WORK_H or b == "iprs":
+        return True
+    if re.match(r"^(s|sr|sl|serial|row|sno|s no)\b", b):
+        return False
+    return bool((re.search(r"\b(iprs|work|internal|tune)\b", b) and _CODEISH.search(b))
+                or re.search(r"\b(song|track) codes?\b", b))
+
+
+def _is_album_h(h: str) -> bool:
+    return h in ALBUM_H or bool(re.search(r"\b(album|movie|film|web series|serial name|release)\b", h)
+                                   and "date" not in h and "code" not in h)
+
+
+def _title_col(hdr: list[str], skip: set) -> int | None:
+    """The song title: an exact heading first, then a heading that speaks of the song or track name."""
+    for n in TITLE_H:
+        for j, h in enumerate(hdr):
+            if j not in skip and h == n:
+                return j
+    for word in ("song name", "track name", "song title", "track title", "name of the song", "song", "track", "title"):
+        for j, h in enumerate(hdr):
+            if j in skip or word not in h or _CODEISH.search(h) or _is_isrc_h(h) or _is_album_h(h):
+                continue
+            return j
+    return None
+
+
 def map_header(row: list) -> dict:
     hdr = [_norm_h(x) for x in row]
-    m = dict(title=_find(hdr, TITLE_H), work=_find(hdr, WORK_H), isrc=_find(hdr, ISRC_H), month=_find(hdr, MONTH_H),
-             revenue=_find(hdr, REV_H), usage=_find(hdr, USE_H), album=_find(hdr, ALBUM_H), upc=_find(hdr, UPC_H),
+    isrc_cols = [j for j, h in enumerate(hdr) if h and _is_isrc_h(h)]
+    work_cols = [j for j, h in enumerate(hdr) if h and _is_work_h(h)]
+    album = _find(hdr, ALBUM_H)
+    if album is None:
+        album = next((j for j, h in enumerate(hdr) if h and _is_album_h(h) and j not in isrc_cols + work_cols), None)
+    m = dict(title=_title_col(hdr, set(isrc_cols + work_cols) | ({album} if album is not None else set())),
+             work=work_cols[0] if work_cols else None, isrc=isrc_cols[0] if isrc_cols else None,
+             month=_find(hdr, MONTH_H),
+             revenue=_find(hdr, REV_H), usage=_find(hdr, USE_H), album=album, upc=_find(hdr, UPC_H),
              platform=_find(hdr, PLAT_H), currency=_find(hdr, CUR_H), status=_find(hdr, STATUS_H),
-             note=_find(hdr, NOTE_H))
+             note=_find(hdr, NOTE_H), language=_find(hdr, ("language", "lang", "song language")))
+    m["isrc_cols"], m["work_cols"] = isrc_cols, work_cols
     if m["revenue"] is None:
         for j, h in enumerate(hdr):
             if "revenue" in h or "royalt" in h or "earning" in h:
@@ -289,16 +342,28 @@ def _status_column(rows: list[list], h: int, m: dict) -> tuple[int | None, int |
     return None, None
 
 
+def codes_in(r: list, cols: list[int], read) -> tuple[list[str], list[str]]:
+    """The codes of every column of one kind (ISRC 1 … ISRC 16, IPRS Song Code 1 …), in column order, once each."""
+    good, bad = [], []
+    for j in cols:
+        a, b = read(_cell(r, j))
+        good += a
+        bad += b
+    return list(dict.fromkeys(good)), list(dict.fromkeys(bad))
+
+
 def parse_song_list(rows: list[list], sheet: str, h: int, m: dict) -> SongListData:
     st_col, note_col = _status_column(rows, h, m)
     entries: list[SongEntry] = []
+    wcols = m.get("work_cols") or ([m["work"]] if m["work"] is not None else [])
+    icols = m.get("isrc_cols") or ([m["isrc"]] if m["isrc"] is not None else [])
     for i in range(h + 1, len(rows)):
         r = rows[i]
         if not r or all(v is None for v in r):
             continue
         title = s(_cell(r, m["title"])) if m["title"] is not None else ""
-        works, other = works_of(_cell(r, m["work"])) if m["work"] is not None else ([], [])
-        isrcs, bad = isrcs_of(_cell(r, m["isrc"])) if m["isrc"] is not None else ([], [])
+        works, other = codes_in(r, wcols, works_of)
+        isrcs, bad = codes_in(r, icols, isrcs_of)
         if not title and not works and not isrcs:
             continue
         if re.match(r"^total\b", title.lower()) and not works and not isrcs:

@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "./api";
 import { useApp } from "./session";
-import { Button, Dialog, DownloadButton, Loading, Notice } from "./ui";
+import { Button, Dialog, DownloadButton, Loading, Notice, ScrollX } from "./ui";
 
 export type PreviewReport = { id: number; label: string };
 type Preview = {
@@ -54,7 +54,7 @@ export function ReportPreview({ reports, start = 0, onClose }: { reports: Previe
       )}
       {q.isLoading ? <Loading text="Opening the workbook…" /> : q.isError ? <Notice tone="bad">{(q.error as Error).message}</Notice>
         : d && d.rows.length === 0 ? <Notice>This sheet is empty.</Notice> : d && (
-        <div className="pv-wrap">
+        <ScrollX className="pv-wrap" label="Report preview">
           <table className="pv" ref={table}>
             <thead><tr><th className="pv-n" />{d.rows[0].map((_, i) => <th key={i} className={frozen(i)}>{col(i)}</th>)}</tr></thead>
             <tbody>
@@ -66,7 +66,7 @@ export function ReportPreview({ reports, start = 0, onClose }: { reports: Previe
               ))}
             </tbody>
           </table>
-        </div>
+        </ScrollX>
       )}
       <div className="actions spread">
         <span className="muted small">{d && (d.total_rows > d.shown_rows

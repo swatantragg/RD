@@ -3,3 +3,6 @@ __pycache__
 .pytest_cache
 .ruff_cache
 data
+.env
+.env.*
+!.env.example
