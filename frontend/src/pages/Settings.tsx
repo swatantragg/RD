@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, qs } from "../api";
-import { int } from "../format";
+import { NUMBER_PATTERN, int, numeric } from "../format";
 import { ClientSelect, FormDialog, ResetFilters } from "../parts";
 import { initials, useApp } from "../session";
 import { ThemeSwitch } from "../theme";
@@ -316,7 +316,8 @@ function ReconEdit({ d, cid, name, onClose, onSaved }: { d: RS; cid: number; nam
                 onSubmit={async () => onSaved(await api.post<RS>("/reconciliation/settings/platforms", { client_id: cid, ...f,
                   platforms: d.platforms.map((p) => ({ platform_id: p.platform_id, use_default: !!use[p.platform_id], benchmark_percentage: use[p.platform_id] ? null : own[p.platform_id] })) }))}>
       <label className="field">Indicative reference benchmark (% of eligible revenue)
-        <input className="input" inputMode="decimal" required value={f.benchmark_percentage} onChange={(e) => setF({ ...f, benchmark_percentage: e.target.value })} /></label>
+        <input className="input" inputMode="decimal" required pattern={NUMBER_PATTERN} title="A number, for example 4 or 4.5"
+               value={f.benchmark_percentage} onChange={(e) => setF({ ...f, benchmark_percentage: numeric(e.target.value, 4) })} /></label>
       <fieldset className="box plat-pick"><legend>Apply {bench} % to these platforms</legend>
         {d.platforms.length === 0 ? <p className="muted small">No platform in {name}'s statements yet. The value applies to every platform found later.</p> : <>
           <p className="hint">Platforms found in {name}'s uploaded statements. Untick a platform to give it its own percentage.</p>
@@ -327,13 +328,14 @@ function ReconEdit({ d, cid, name, onClose, onSaved }: { d: RS; cid: number; nam
                 {" "}<b>{p.platform}</b> <span className="muted small">{int(p.platform_reports ?? 0)} platform · {int(p.client ?? p.revenue)} client · {int(p.iprs)} IPRS</span></label>
               {use[p.platform_id] ? <span className="muted small">{bench} %</span> : (
                 <label className="field inline">Benchmark %
-                  <input className="input sm" inputMode="decimal" required value={own[p.platform_id] ?? ""} placeholder="e.g. 5" aria-label={`Benchmark for ${p.platform}`}
-                         onChange={(e) => setOwn({ ...own, [p.platform_id]: e.target.value })} /></label>)}
+                  <input className="input sm" inputMode="decimal" required pattern={NUMBER_PATTERN} title="A number, for example 5 or 5.5" value={own[p.platform_id] ?? ""} placeholder="e.g. 5"
+                         aria-label={`Benchmark for ${p.platform}`} onChange={(e) => setOwn({ ...own, [p.platform_id]: numeric(e.target.value, 4) })} /></label>)}
             </div>))}
         </>}
       </fieldset>
-      <label className="field">Client interest in the reported revenue (%)<input className="input" inputMode="decimal" value={f.client_interest_pct} placeholder="empty = the whole revenue (100 %)"
-                                                                               onChange={(e) => setF({ ...f, client_interest_pct: e.target.value })} />
+      <label className="field">Client interest in the reported revenue (%)<input className="input" inputMode="decimal" pattern={NUMBER_PATTERN} title="A number, for example 100 or 50"
+                                                                               value={f.client_interest_pct} placeholder="empty = the whole revenue (100 %)"
+                                                                               onChange={(e) => setF({ ...f, client_interest_pct: numeric(e.target.value, 4) })} />
         <span className="hint">The client's share of the revenue in the report (for example 100 % if the client owns the recordings outright, 50 % if it shares them).</span></label>
       <div className="form-grid">
         <label className="field">Revenue basis compared<Select value={f.revenue_basis} onChange={(v) => setF({ ...f, revenue_basis: v })} options={[{ value: "GROSS", label: "Gross" }, { value: "NET", label: "Net" }]} /></label>

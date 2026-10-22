@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api, qs } from "../api";
 import { dmy, int, mon, money } from "../format";
 import { useApp } from "../session";
-import { Amount, ClientSelect, MappingPill, NeedClient, Pager, PeriodPicker, ResetFilters, Selection, changed, monthEnd, monthStart, period } from "../parts";
+import { Amount, ClientSelect, MappingPill, NeedClient, Pager, PeriodPicker, ResetFilters, Selection, changed, freeze, monthEnd, monthStart, period } from "../parts";
 import { Button, Card, Dialog, DownloadButton, Empty, Loading, Money, Notice, Page, Pill, ScrollX, Select, day } from "../ui";
 import { WorkDialog } from "./Catalogue";
 
@@ -49,7 +49,7 @@ const SHEET_PAGE = 100;
 const FIRST: Record<SortKey, string> = { title: "title_asc", amount: "amount_desc", platform: "platform_desc" };   // a header's first click
 const FLIP: Record<string, string> = { title_asc: "title_desc", title_desc: "title_asc", amount_desc: "amount_asc", amount_asc: "amount_desc",
   platform_desc: "platform_asc", platform_asc: "platform_desc" };
-const FROZEN = 2;                                          // ISRC and Song Name stay in view while scrolling sideways
+const FROZEN = 3;                                          // ISRC, Song Name and Internal No stay in view while scrolling sideways
 
 function cell(v: string | null, t: SheetCol["t"]): string {
   if (v === null || v === "") return "";
@@ -71,11 +71,7 @@ function MasterSheet({ cid, f, setF }: { cid: number; f: F; setF: (f: F) => void
   const v = q.data;
   const shown = v?.sort ?? sort;                            // the server falls back to Total Amount when a platform sort no longer applies
   const table = useRef<HTMLTableElement>(null);
-  useLayoutEffect(() => {                                   // the second frozen column starts where the first one ends
-    const t = table.current;
-    const first = t?.querySelector<HTMLElement>("thead tr.h2 th");
-    if (t && first) t.style.setProperty("--fz1", `${first.offsetWidth}px`);
-  }, [v]);
+  useLayoutEffect(() => freeze(table.current), [v]);         // each frozen column starts where the ones before it end
   const plat = opts.data?.platforms.find((x) => String(x.id) === f.platform_id)?.name;
   const stmt = opts.data?.statements.find((x) => String(x.id) === f.statement_id);
   const sorts = [{ value: "amount_desc", label: "Total amount, high → low" }, { value: "amount_asc", label: "Total amount, low → high" },
@@ -240,24 +236,26 @@ function Works({ cid, f, setF }: { cid: number; f: F; setF: (f: F) => void }) {
       <Card>
         {!v ? <Loading /> : v.rows.length === 0 ? <Empty title="No work matches">Change the filters, or import the catalogue first.</Empty> : (
           <ScrollX label="Works by platform">
-            <table className="tbl master">
+            <table className="tbl master" ref={(t) => freeze(t)}>
               <thead>
-                <tr><th rowSpan={2}>Song</th><th rowSpan={2}>ISRCs</th><th rowSpan={2}>Links</th>
+                <tr><th rowSpan={2} className="fz fz0">Internal No</th><th rowSpan={2} className="fz fz1">Song</th><th rowSpan={2} className="fz fz2">ISRCs</th><th rowSpan={2}>Links</th>
                   {kinds.map(([k, l, cls]) => <th key={k} colSpan={v.columns[k].length + 1} className={`grp ${cls === "roy" ? "roy" : "rev"}`}>{l}</th>)}
                   <th rowSpan={2}>Exceptions</th><th rowSpan={2}>Updated</th></tr>
                 <tr>{kinds.map(([k]) => [...v.columns[k].map((c) => <th key={k + c.id} className="num">{c.name}</th>), <th key={k + "t"} className="num">Total</th>])}</tr>
               </thead>
               <tbody>{v.rows.map((r) => (
                 <tr key={r.id} className="click" onClick={() => setSrc(r)}>
-                  <td><b>{r.work_title}</b><div className="muted small mono">{r.internal_work_number ?? "no work number"}</div></td>
-                  <td className="small" title={r.isrcs.map((x) => x.isrc).join(", ")}>{r.isrcs.length ? `${r.isrcs.length} ISRC${r.isrcs.length === 1 ? "" : "s"}` : "—"}</td>
+                  <td className="fz fz0 mono nowrap">{r.internal_work_number ?? <span className="muted small">no work number</span>}</td>
+                  <td className="fz fz1"><b>{r.work_title}</b></td>
+                  <td className="fz fz2 small mono nowrap" title={r.isrcs.map((x) => x.isrc).join(", ")}>{r.isrcs.length ? <>{r.isrcs.slice(0, 2).map((x) => x.isrc).join(", ")}
+                    {r.isrcs.length > 2 && <span className="muted"> +{r.isrcs.length - 2}</span>}</> : "—"}</td>
                   <td><MappingPill status={r.mapping_state} /></td>
                   {kinds.map(([k]) => [...v.columns[k].map((c) => <td key={k + c.id} className="num">{val(k, r[k]?.[String(c.id)])}</td>),
                     <td key={k + "t"} className="num"><b>{val(k, r[`${k}_total`])}</b></td>])}
                   <td>{r.open_exceptions ? <Pill tone="warn">{r.open_exceptions} open</Pill> : ""}</td>
                   <td className="small nowrap">{day(r.last_updated)}</td>
                 </tr>))}</tbody>
-              <tfoot><tr><td colSpan={3}><b>Total ({int(v.total)} works, all pages)</b></td>
+              <tfoot><tr><td colSpan={3} className="fz fz0"><b>Total ({int(v.total)} works, all pages)</b></td><td />
                 {kinds.map(([k]) => [...v.columns[k].map((c) => <td key={k + c.id} className="num">{tot(k, v.totals[k][String(c.id)])}</td>),
                   <td key={k + "t"} className="num"><b>{tot(k, Object.values(v.totals[k]).reduce((a, b) => a + Number(b || 0), 0))}</b></td>])}
                 <td colSpan={2} /></tr></tfoot>

@@ -181,3 +181,16 @@ export function Facts({ items }: { items: [ReactNode, ReactNode][] }) {
   return <dl className="facts">{items.filter(([, v]) => v !== null && v !== undefined && v !== "").map(([k, v], i) =>
     <span key={i} style={{ display: "contents" }}><dt>{k}</dt><dd>{v}</dd></span>)}</dl>;
 }
+
+/** For a table whose first columns stay in view (th/td .fz0, .fz1, .fz2 …): each frozen column starts where the ones
+ *  before it end (--fz1, --fz2 …). Call it after every render that can change the column widths. */
+export function freeze(t: HTMLTableElement | null) {
+  if (!t) return;
+  let left = 0;
+  for (let k = 0; ; k++) {
+    const th = Array.from(t.querySelectorAll<HTMLElement>(`thead th.fz${k}`)).find((x) => (x as HTMLTableCellElement).colSpan === 1);
+    if (!th) return;
+    if (k > 0) t.style.setProperty(`--fz${k}`, `${left}px`);
+    left += th.getBoundingClientRect().width;
+  }
+}

@@ -20,7 +20,7 @@ from decimal import Decimal
 from .. import audit, db
 from ..security import Forbidden
 from . import access, xlsx
-from .recon import MISSING_IPRS, _later, why_not_query
+from .recon import MISSING_IPRS, _later, plain_number, why_not_query
 from .service import RDError
 
 STATUS_LABEL = {
@@ -430,7 +430,10 @@ def act(actor: dict, enquiry_id: int, action: str, p: dict) -> dict:
             if not note:
                 raise EnquiryError("Please describe the correction, payment or additional royalty.")
             amount = p.get("amount")
-            meta = dict(kind=kind, amount=str(Decimal(str(amount))) if amount not in (None, "") else None,
+            if amount not in (None, "") and plain_number(amount, commas=True) is None:
+                raise EnquiryError("The amount must be a number, for example 1250 or 1250.50.")
+            amount = plain_number(amount, commas=True) if amount not in (None, "") else None
+            meta = dict(kind=kind, amount=str(amount) if amount is not None else None,
                         related_statement_id=p.get("related_statement_id"))
             text = {"CORRECTION": "Correction identified", "ADDITIONAL_ROYALTY": "Additional royalty identified",
                     "PAYMENT": "Payment identified"}[kind] + (f" ({_money(amount)})" if meta["amount"] else "") + \
@@ -751,6 +754,7 @@ def attachment(actor: dict, enquiry_id: int) -> tuple[str, bytes]:
     wb = Workbook()
     block_sheet(wb, "Songs", platform=run["platform_name"], client_code=run["code"],
                 benchmark=run["benchmark_percentage"], blocks=blocks, items=its, values=vals,
+                interest=run["client_interest_pct"],
                 notes=[f"{run['client_name']} - {run['platform_name']} songs for {_period(a, b)} "
                        f"({e['enquiry_reference']}).",
                        "Usage = the plays the platform reported for the song in the period shown. Expected value = "

@@ -1,9 +1,9 @@
 import { useState, type CSSProperties } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, qs } from "../api";
-import { int, mon } from "../format";
+import { NUMBER_PATTERN, int, mon, numeric } from "../format";
 import { useApp } from "../session";
-import { Amount, ClientSelect, Facts, FormDialog, MappingPill, NeedClient, Pager, Pct, ResetFilters, Selection, changed, monthEnd, monthStart, period } from "../parts";
+import { Amount, ClientSelect, Facts, FormDialog, MappingPill, NeedClient, Pager, Pct, ResetFilters, Selection, changed, monthEnd, monthStart, period, freeze } from "../parts";
 import { Button, Card, Dialog, DownloadButton, Empty, Loading, Money, More, Notice, Page, Pill, ScrollX, Select, day, when, type Tone } from "../ui";
 import { AddWork, WorkDialog, WorkNumberField, type FoundWork } from "./Catalogue";
 
@@ -414,11 +414,12 @@ function RunPage({ runId, cid }: { runId: number; cid: number }) {
           const sides = (["PLATFORM", "CLIENT", "IPRS"] as const).map((k) => [k, blocks.filter((b) => b.side === k)] as const).filter(([, bs]) => bs.length > 0);
           const band: Record<string, [string, string]> = { PLATFORM: ["SOURCE", r.platform_name], CLIENT: ["CLIENT", `Client statement (${r.client_code})`], IPRS: ["IPRS", "IPRS royalty"] };
           const hasCli = blocks.some((b) => b.side === "CLIENT");
-          const calc = platformRun ? 5 + (hasCli ? 1 : 0) : 2;
+          const calc = platformRun ? 6 + (hasCli ? 1 : 0) : 2;
+          const interest = r.client_interest_pct ? Number(r.client_interest_pct) : null;     // expected = bench % of this revenue
           const cell = (i: Item, b: Block) => i.blocks?.[b.key];
           return (
             <ScrollX className="sheet-wrap" label="Reconciliation items">
-              <table className="skv recon-skv blocks" ref={(t) => { const th = t?.querySelector<HTMLElement>("thead th.fz0"); if (t && th) t.style.setProperty("--fz1", `${th.offsetWidth}px`); }}>
+              <table className="skv recon-skv blocks" ref={(t) => freeze(t)}>
                 <colgroup><col span={3} />{sides.map(([k, bs]) => <col key={k} span={bs.length * 5} style={tint(band[k][0])} />)}
                   <col span={calc} style={tint("CALC")} />{yearly && <col span={4} style={tint("YOY")} />}<col span={3} style={tint("STATUS")} /></colgroup>
                 <thead>
@@ -427,7 +428,7 @@ function RunPage({ runId, cid }: { runId: number; cid: number }) {
                       <input type="checkbox" aria-label="Tick every item on this page" checked={pageAll} ref={(el) => { if (el) el.indeterminate = pageSome && !pageAll; }}
                              onChange={(e) => togglePage(e.target.checked)} />}Internal No</span></th>
                     <th rowSpan={3} className="fz fz1 band-id">Song name</th>
-                    <th rowSpan={3} className="band-id">ISRC</th>
+                    <th rowSpan={3} className="fz fz2 band-id">ISRC</th>
                     {sides.map(([k, bs]) => <th key={k} colSpan={bs.length * 5} className="band" style={fill(band[k][0])}>{band[k][1]}</th>)}
                     <th colSpan={calc} className="band" style={fill("CALC")}>{platformRun ? `Check: expected (${bench} %) vs paid` : "Check"}</th>
                     {yearly && <th colSpan={4} className="band" style={fill("YOY")}>{r.previous_period_start ? `Year before (${period(r.previous_period_start, r.previous_period_end)})` : "Year before"}</th>}
@@ -439,7 +440,8 @@ function RunPage({ runId, cid }: { runId: number; cid: number }) {
                       <th key={b.key + "d"} rowSpan={2} className="band" style={fill(band[k][0])}>Date</th>,
                       <th key={b.key + "p"} colSpan={2} className="band" style={fill(band[k][0])}>Period</th>,
                       <th key={b.key + "n"} rowSpan={2} className="band sep" style={fill(band[k][0])}>Distribution No</th>]))}
-                    {platformRun && <><th rowSpan={2} className="num band" style={fill("CALC")}>Expected value ({bench} %)</th></>}
+                    {platformRun && <><th rowSpan={2} className="num band" style={fill("CALC")}>{interest === null ? "Total revenue" : `Revenue counted (${interest} % client interest)`}</th>
+                      <th rowSpan={2} className="num band" style={fill("CALC")}>Expected value ({bench} %)</th></>}
                     <th rowSpan={2} className="num band" style={fill("CALC")}>IPRS paid</th>
                     {platformRun && <><th rowSpan={2} className="num band" style={fill("CALC")}>Paid % of revenue</th>
                       <th rowSpan={2} className="num band" style={fill("CALC")}>Variance %</th><th rowSpan={2} className={`num band ${hasCli ? "" : "sep"}`} style={fill("CALC")}>Variance amount</th></>}
@@ -463,7 +465,7 @@ function RunPage({ runId, cid }: { runId: number; cid: number }) {
                       <span className="mono">{i.internal_work_number ?? <span className="muted">{L.kinds[i.item_kind]}</span>}</span></div></td>
                     <td className="fz fz1"><div className="clip"><b title={i.work_title ?? undefined}>{i.work_title ?? (i.isrcs[0] || "No ISRC")}</b>
                       {i.enquiry && <div className="small"><a href={`#/enquiries/${i.enquiry.id}`} onClick={(e) => e.stopPropagation()}>{i.enquiry.reference}</a></div>}</div></td>
-                    <td className="small mono" title={i.isrcs.join(", ")}>{i.isrcs.slice(0, 2).join(", ")}{i.isrcs.length > 2 && <span className="muted"> +{i.isrcs.length - 2}</span>}</td>
+                    <td className="fz fz2 small mono" title={i.isrcs.join(", ")}>{i.isrcs.slice(0, 2).join(", ")}{i.isrcs.length > 2 && <span className="muted"> +{i.isrcs.length - 2}</span>}</td>
                     {sides.map(([, bs]) => bs.map((b) => {
                       const v = cell(i, b);
                       return [
@@ -473,7 +475,8 @@ function RunPage({ runId, cid }: { runId: number; cid: number }) {
                         <td key={b.key + "u"} className="num"><Plays v={v?.usage} /></td>,
                         <td key={b.key + "n"} className="small sep">{v ? b.reference : ""}</td>];
                     }))}
-                    {platformRun && <td className="num"><Amount v={i.reference_benchmark_amount} /></td>}
+                    {platformRun && <><td className="num"><Amount v={interest === null ? i.sound_recording_revenue : i.eligible_revenue_basis} /></td>
+                      <td className="num"><Amount v={i.reference_benchmark_amount} /></td></>}
                     <td className="num b">{i.iprs_royalty_amount === null && i.item_kind === "WORK" && i.open_exceptions.includes("MISSING_IPRS_ENTRY")
                       ? <span className="bad-t small" title={MISSING}>No IPRS entry</span> : <Amount v={i.iprs_royalty_amount} />}</td>
                     {platformRun && <><td className="num"><Pct v={i.observed_percentage} /></td>
@@ -668,8 +671,9 @@ function Addressed({ itemId, onClose, onDone }: { itemId: number; onClose: () =>
       <p>Record the verified evidence. The item's exceptions are closed with it and the item is marked reviewed; the calculated figures stay as they were.</p>
       <label className="field">By<Select value={f.kind} onChange={(v) => setF({ ...f, kind: v })} options={[{ value: "LATER_STATEMENT", label: "A later statement" },
         { value: "PAYMENT", label: "A payment" }, { value: "ADJUSTMENT", label: "An adjustment" }]} /></label>
-      <label className="field">Statement number (optional, as shown under Statements)<input className="input" inputMode="numeric" value={f.statement_id} onChange={(e) => setF({ ...f, statement_id: e.target.value })} /></label>
-      <label className="field">Amount (optional)<input className="input" inputMode="decimal" value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} /></label>
+      <label className="field">Statement number (optional, as shown under Statements)<input className="input" inputMode="numeric" value={f.statement_id} onChange={(e) => setF({ ...f, statement_id: numeric(e.target.value, 0) })} /></label>
+      <label className="field">Amount (optional)<input className="input" inputMode="decimal" pattern={NUMBER_PATTERN} title="A number, for example 1250 or 1250.50"
+                                                    value={f.amount} onChange={(e) => setF({ ...f, amount: numeric(e.target.value) })} /></label>
       <label className="field">Evidence<textarea className="input" rows={3} required value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} /></label>
     </FormDialog>
   );

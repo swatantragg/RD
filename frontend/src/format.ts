@@ -39,3 +39,13 @@ export function bytes(n: number): string {
 export const words = (s: string | null | undefined) => (s ? s.replace(/_/g, " ").toLowerCase() : "");
 export const today = () => new Date().toISOString().slice(0, 10);
 export const plusDays = (n: number) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
+
+/** What a number field keeps of what is typed or pasted: digits and one decimal point with at most `places` decimals
+ *  (none when places is 0); letters, signs, spaces and commas are dropped. */
+export function numeric(v: string, places = 2): string {
+  if (places === 0) return v.replace(/\D/g, "");
+  const [a, ...b] = v.replace(/[^\d.]/g, "").split(".");
+  return b.length ? `${a}.${b.join("").slice(0, places)}` : a;
+}
+/** The pattern of a finished number (so '4.' or '.' is refused before it is sent). */
+export const NUMBER_PATTERN = "[0-9]+([.][0-9]+)?";

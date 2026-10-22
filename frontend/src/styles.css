@@ -556,7 +556,7 @@ pre.draft-view { white-space: pre-wrap; font-family: var(--font); background: va
 @media (max-width: 900px) {
   .me .client-pick { display: none; }
 }
-.tbl.master td:first-child, .tbl.master th:first-child { min-width: 210px; }
+.tbl.master td:nth-child(2), .tbl.master th:nth-child(2) { min-width: 210px; }
 .tbl.recon td:nth-child(3) { min-width: 220px; }
 .tbl td.num, .tbl th.num { white-space: nowrap; }
 
@@ -627,12 +627,14 @@ table.skv th.band-id { background: var(--surface-3); }
 table.skv col[style] { background: color-mix(in srgb, var(--tint) var(--mix-c), transparent); }
 table.skv .fz { position: sticky; z-index: 1; background: var(--surface); }
 table.skv .fz0 { left: 0; }
-table.skv .fz1 { left: var(--fz1); border-right: 2px solid var(--border-strong); }
-table.skv tr.h1 th.fz0 { border-right: 2px solid var(--border-strong); }
+table.skv .fz1 { left: var(--fz1); }
+table.skv .fz2 { left: var(--fz2); border-right: 2px solid var(--border-strong); }
+table.skv tr.h1 th.fz0[colspan] { border-right: 2px solid var(--border-strong); }
 table.skv thead .fz { z-index: 4; background: var(--surface-3); }
 table.skv .clip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 table.skv td.fz0 .clip { width: 220px; }
 table.skv td.fz1 .clip { width: 250px; }
+table.skv td.fz2 .clip { width: 110px; }
 table.skv tbody tr:nth-child(even) td.fz { background: var(--surface-2); }
 table.skv tbody tr:hover td { background: var(--accent-wash); }
 table.skv td.b { font-weight: 650; }
@@ -714,4 +716,13 @@ table.skv.blocks tr.h3 th { top: 68px; font-size: 12px; text-align: center; bord
 table.skv.blocks thead th[rowspan="3"], table.skv.blocks tr.h2 th[rowspan="2"] { border-bottom: 2px solid var(--border-strong); }
 table.skv.blocks td.fz0 { min-width: 120px; }
 table.skv.blocks td.fz1 .clip { width: 240px; }
-table.skv.blocks .fz1 { border-right: 2px solid var(--border-strong); }
+table.skv.blocks .fz2 { border-right: 2px solid var(--border-strong); }
+/* 1.5.4: Internal No, Song name and ISRC stay in view in the wide tables (the left offsets come from freeze()) */
+.tbl.master .fz { position: sticky; z-index: 1; background: var(--surface); }
+.tbl.master th.fz { z-index: 3; background: var(--surface-2); }
+.tbl.master .fz0 { left: 0; }
+.tbl.master .fz1 { left: var(--fz1); }
+.tbl.master .fz2 { left: var(--fz2); border-right: 2px solid var(--border-strong); }
+.tbl.master tfoot td.fz { background: var(--surface-2); border-right: 2px solid var(--border-strong); }
+.tbl.master tr.click:hover td.fz { background: var(--surface-2); }
+@media (max-width: 700px) { .tbl.master .fz { position: static; } }

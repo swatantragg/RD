@@ -1,3 +1,3 @@
 """MRM Royalty Reconciliation - catalogue, statement library, reconciliation against IPRS, enquiries and the SKV master
 reports (architecture.md)."""
-__version__ = "1.5.3"
+__version__ = "1.5.4"

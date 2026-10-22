@@ -22,8 +22,9 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import re
 from collections import defaultdict
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 
 from .. import audit, db
 from ..normalize import month_end, months_between
@@ -61,13 +62,23 @@ class ReconError(RDError):
     pass
 
 
+PLAIN_NUMBER = re.compile(r"\d+(\.\d+)?")            # digits, optionally a decimal point and more digits - nothing else
+
+
+def plain_number(v, commas: bool = False) -> Decimal | None:
+    """A number typed by a person, or None when it is not one: '1e2', 'NaN', '4a', '-4' are not. commas: an amount
+    may have thousands commas (1,250.50); a percentage may not ('1,5' is refused, not read as 15)."""
+    t = str(v).strip().rstrip("%").strip()
+    t = t.replace(",", "") if commas else t
+    return Decimal(t) if PLAIN_NUMBER.fullmatch(t) else None
+
+
 def _dec(v, what: str) -> Decimal | None:
     if v in (None, ""):
         return None
-    try:
-        d = Decimal(str(v).strip().rstrip("%"))
-    except InvalidOperation:
-        raise ReconError(f"{what} must be a number.") from None
+    d = plain_number(v)
+    if d is None:
+        raise ReconError(f"{what} must be a number, for example 4 or 4.5.")
     if not (ZERO < d <= HUNDRED):
         raise ReconError(f"{what} must be more than 0 and at most 100 (per cent).")
     return d
@@ -1096,11 +1107,12 @@ def result_of(i: dict) -> str:
 
 
 def block_sheet(wb: Workbook, title: str, *, platform: str, client_code: str, benchmark, blocks: list[dict],
-                items: list[dict], values: dict, notes: list[str], status: dict | None = None) -> None:
+                items: list[dict], values: dict, notes: list[str], status: dict | None = None, interest=None) -> None:
     """The song report: Internal No · Song name · ISRC, then one section per kind - the platform (e.g. SPOTIFY),
     the client's statements, IPRS ROYALTY - with, for each statement, Amount · Date · Period (period, usage) ·
-    Distribution number; then the check: expected (benchmark % of the revenue), IPRS paid, % paid, variance % and
-    variance. status: optional extra columns per item (exceptions, review …). Three heading rows, frozen."""
+    Distribution number; then the check: the revenue the benchmark is taken of, expected (benchmark % of it), IPRS
+    paid, % paid, variance % and variance. status: optional extra columns per item (exceptions, review …). Three
+    heading rows; they and Internal No, Song name and ISRC are frozen. interest: the client interest %, if set."""
     ws = wb.create_sheet(title[:31]) if wb.worksheets and wb.active.max_row > 1 else wb.active
     ws.title = title[:31]
     bench = Decimal(benchmark).normalize() if benchmark is not None else None
@@ -1138,6 +1150,10 @@ def block_sheet(wb: Workbook, title: str, *, platform: str, client_code: str, be
                 total=b["reference"])
         sections.append((side, a, len(cols)))
     a = len(cols) + 1
+    share = Decimal(interest).normalize() if interest is not None else None
+    add("CHECK", f"Revenue counted ({share} % client interest)" if share is not None else "Total revenue", 15,
+        xlsx.MONEY, value=lambda i: i["eligible_revenue_basis"] if share is not None else i["sound_recording_revenue"],
+        total="sum")
     add("CHECK", f"Expected value ({bench} % of revenue)" if bench is not None else "Expected value", 15, xlsx.MONEY,
         value=lambda i: i["reference_benchmark_amount"], total="sum")
     add("CHECK", "IPRS paid", 14, xlsx.MONEY, value=lambda i: i["iprs_royalty_amount"], total="sum")
@@ -1224,7 +1240,7 @@ def block_sheet(wb: Workbook, title: str, *, platform: str, client_code: str, be
         excel.put(ws, tr + 2, 1, " ".join(notes), font=excel.NOTE_F, al=Alignment(vertical="top", wrap_text=True))
         ws.merge_cells(start_row=tr + 2, start_column=1, end_row=tr + 2, end_column=min(len(cols), 14))
         ws.row_dimensions[tr + 2].height = 75
-    ws.freeze_panes = "C4"                                 # Internal No and Song name, and the headings, stay in view
+    ws.freeze_panes = "D4"                                 # Internal No, Song name, ISRC and the headings stay in view
     ws.auto_filter.ref = f"A3:{get_column_letter(len(cols))}{max(first + len(items) - 1, 3)}"
 
 
@@ -1484,12 +1500,13 @@ def mark_addressed(actor: dict, item_id: int, body: dict) -> dict:
         raise ReconError("Please describe the evidence (statement, distribution, payment reference, amount).")
     amount = body.get("amount")
     if amount not in (None, ""):
-        try:
-            amount = str(Decimal(str(amount).replace(",", "")))
-        except InvalidOperation:
-            raise ReconError("The amount must be a number.") from None
+        if plain_number(amount, commas=True) is None:
+            raise ReconError("The amount must be a number, for example 1250 or 1250.50.")
+        amount = str(plain_number(amount, commas=True))
     else:
         amount = None
+    if body.get("statement_id") and not str(body["statement_id"]).strip().isdigit():
+        raise ReconError("The statement number must be a number, as shown under Statements.")
     sid = int(body["statement_id"]) if body.get("statement_id") else None
     label = {"LATER_STATEMENT": "a later statement", "PAYMENT": "a payment", "ADJUSTMENT": "an adjustment"}[kind]
     text = f"Addressed by {label}" + (f" (statement #{sid})" if sid else "") + (f", amount {amount}" if amount else "") \
@@ -1787,7 +1804,8 @@ def report(actor: dict, run_id: int, f: dict) -> tuple[str, bytes]:
                          for x in r["source_snapshot"].get(key, [])]
     wb = Workbook()
     block_sheet(wb, "Reconciliation", platform=plat, client_code=r["code"], benchmark=r["benchmark_percentage"],
-                blocks=blocks, items=its, values=bvals, notes=head, status=status_cols)
+                blocks=blocks, items=its, values=bvals, notes=head, status=status_cols,
+                interest=r["client_interest_pct"])
     other = [
         dict(title="Summary", heading=head, columns=[("", 44, None), ("", 90, None)], rows=summary_rows),
         dict(title="Exceptions", heading=head, columns=[("Item", 6, None), ("Work number", 12, None),

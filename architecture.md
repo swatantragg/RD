@@ -2066,3 +2066,22 @@ a draft whose text is still the generated letter rewrites it for the remaining s
 "A. Works for which we could not find an entry …" / "B. …"); the page then offers "Rebuild the text". The enquiry
 page no longer shows the Items table (the songs are in the attachment and the Excel working paper), so items are not
 removed from the screen any more; `remove_item` stays in the API.
+
+## 34. Version 1.5.4: revenue in the check section, three frozen columns
+
+**Check section**: the run page and `recon.block_sheet` (Excel report, enquiry attachment) start the CHECK section
+with the revenue the benchmark is taken of: `sound_recording_revenue` ("Total revenue"), or, when the run has a client
+interest, `eligible_revenue_basis` ("Revenue counted (N % client interest)"); `block_sheet(…, interest=)` takes the
+run's `client_interest_pct`. Summed in the Excel TOTAL row.
+
+**Frozen columns**: `parts.freeze(table)` sets `--fz1`, `--fz2` … from the widths of the header cells `th.fz0`,
+`th.fz1` … (the one with colspan 1), so each frozen column starts where the ones before it end; called on every render
+of the reconciliation table and Works by platform, and in the master sheet's layout effect. Three columns are frozen:
+reconciliation (Internal No, Song name, ISRC), master sheet (ISRC, Song Name, Internal No, the SKV order) and Works
+by platform (now Internal No, Song, ISRCs as separate columns). The thick divider moved from `.fz1` to `.fz2`. Excel:
+`block_sheet` freezes at D4 (was C4); the SKV master workbook already froze at E3/F3.
+
+**Number fields** (1.5.4): `format.numeric(v, places)` keeps digits and one decimal point as a person types or pastes
+(percentages 4 places, amounts 2, statement number 0) and `NUMBER_PATTERN` refuses a dangling '4.' on submit. The
+server parses with `recon.plain_number` (`\d+(\.\d+)?` only; thousands commas only for amounts), so '1e2', 'NaN',
+'Infinity', '-4' and '1,5' as a percentage are refused instead of being read by `Decimal`.

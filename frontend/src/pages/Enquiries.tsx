@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, qs } from "../api";
-import { int, today, plusDays } from "../format";
+import { NUMBER_PATTERN, int, numeric, today, plusDays } from "../format";
 import { useApp } from "../session";
 import { FormDialog, NeedClient, period, ResetFilters } from "../parts";
 import { Button, Card, DownloadButton, Empty, Loading, More, Notice, Page, Pill, Select, day, when, type Tone } from "../ui";
@@ -295,7 +295,8 @@ function ActionDialog({ id, action, d, onClose, onDone }: { id: number; action: 
       {action === "note_correction" && <>
         <label className="field">What was found<Select value={f.kind} onChange={(v) => set("kind", v)} options={[{ value: "CORRECTION", label: "A correction" },
           { value: "ADDITIONAL_ROYALTY", label: "An additional royalty" }, { value: "PAYMENT", label: "A payment" }]} /></label>
-        <label className="field">Amount (optional)<input className="input" inputMode="decimal" value={f.amount ?? ""} onChange={(e) => set("amount", e.target.value)} /></label>
+        <label className="field">Amount (optional)<input className="input" inputMode="decimal" pattern={NUMBER_PATTERN} title="A number, for example 1250 or 1250.50"
+                                                    value={f.amount ?? ""} onChange={(e) => set("amount", numeric(e.target.value))} /></label>
         {note("Details and evidence (for example the statement and distribution)")}
       </>}
       {(action === "resolve" || action === "partially_resolve") && <>

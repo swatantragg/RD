@@ -4,6 +4,20 @@ from __future__ import annotations
 from . import __version__
 
 RELEASES: list[dict] = [
+    dict(version="1.5.4", date="22 Oct 2026",
+         summary="The check section shows the revenue the expected royalty is taken of, and Internal No, song name "
+                 "and ISRC stay in view in the wide tables.",
+         points=["Reconciliation and its Excel report (and a query's attachment): the 'Check: expected vs paid' "
+                 "section starts with the song's total revenue, then the expected value (4 % of it), what IPRS paid, "
+                 "% paid and the variance - e.g. revenue Rs. 100.00, expected Rs. 4.00, IPRS paid Rs. 2.00, variance "
+                 "Rs. 2.00 (50 %). With a client interest set, the column shows the revenue counted at that interest.",
+                 "Internal No, Song name and ISRC stay in place while scrolling sideways: in the reconciliation, the "
+                 "master sheet, Works by platform (now with its own Internal No column and the ISRCs themselves) and "
+                 "in the Excel reconciliation report and query attachment.",
+                 "Number fields take numbers only: the benchmark %, a platform's own %, the client interest % "
+                 "(Settings → Reconciliation) and the amounts and statement number in the reconciliation and enquiry "
+                 "dialogs drop letters and signs as they are typed; the server refuses anything else (e.g. '4a', "
+                 "'1e2', 'NaN', '-4') with a clear message."]),
     dict(version="1.5.3", date="22 Oct 2026",
          summary="The master sheet can be sorted, shows a platform's revenue total only for that platform, and an "
                  "older query draft can be written again without its song list.",
