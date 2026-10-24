@@ -18,8 +18,9 @@ type View = { rows: Row[]; total: number; offset: number; columns: Record<Kind, 
 const MONEY_OPTS = [{ value: "", label: "Every work" }, { value: "any", label: "Works with money" },
   { value: "usage", label: "Works with plays" }, { value: "revenue_no_iprs", label: "Platform revenue but nothing from IPRS" }, { value: "none", label: "Works without money or plays" }];
 const KINDS: [Kind, string, string][] = [["revenue", "Platform revenue", "rev"], ["usage", "Usage (plays)", "use"], ["client", "Client statements", "cli"], ["royalty", "IPRS paid", "roy"]];
-const SORT_OPTS = [{ value: "revenue", label: "Platform revenue, high → low" }, { value: "revenue_asc", label: "Platform revenue, low → high" }, { value: "usage", label: "Most plays first" }, { value: "client", label: "Most in the client's statements first" }, { value: "royalty", label: "Most paid by IPRS first" },
-  { value: "title", label: "Song title, A → Z" }, { value: "title_desc", label: "Song title, Z → A" }, { value: "work", label: "Work number" }, { value: "updated", label: "Recently updated" }];
+const SORT_OPTS = [{ value: "title", label: "Song title, A → Z" }, { value: "title_desc", label: "Song title, Z → A" },
+  { value: "revenue", label: "Platform revenue, high → low" }, { value: "revenue_asc", label: "Platform revenue, low → high" }, { value: "usage", label: "Most plays first" }, { value: "royalty", label: "Most paid by IPRS first" },
+  { value: "work", label: "Work number" }, { value: "updated", label: "Recently updated" }];
 
 export default function Master({ tab }: { tab?: string }) {
   const { go } = useApp();
@@ -60,22 +61,22 @@ function MasterSheet({ cid, f, setF }: { cid: number; f: F; setF: (f: F) => void
   const { toast } = useApp();
   const [offset, setOffset] = useState(0);
   const [side, setSide] = useState<"CLIENT" | "IPRS">("CLIENT");
-  const [sort, setSort] = useState("amount_desc");
+  const [sort, setSort] = useState("title_asc");
   const p = { client_id: cid, side, q: f.q, platform_id: f.platform_id, period_from: monthStart(f.from), period_to: monthEnd(f.to), statement_id: f.statement_id, sort };
   const q = useQuery({ queryKey: ["master-sheet", p, offset], placeholderData: (x) => x, staleTime: 60_000, retry: false,
     queryFn: () => api.get<Sheet>(`/master/sheet${qs({ ...p, offset, limit: SHEET_PAGE })}`) });
   const opts = useQuery({ queryKey: ["master", { client_id: cid }, "opts"], staleTime: 60_000,
     queryFn: () => api.get<View>(`/master${qs({ client_id: cid, offset: 0 })}`) });
-  const set = (k: keyof F, val: string) => { setF({ ...f, [k]: val }); setOffset(0); if (k === "platform_id" && sort.startsWith("platform")) setSort("amount_desc"); };
+  const set = (k: keyof F, val: string) => { setF({ ...f, [k]: val }); setOffset(0); if (k === "platform_id" && sort.startsWith("platform")) setSort("title_asc"); };
   const order = (s: string) => { setSort(s); setOffset(0); };
   const v = q.data;
-  const shown = v?.sort ?? sort;                            // the server falls back to Total Amount when a platform sort no longer applies
+  const shown = v?.sort ?? sort;                            // the server falls back to Song name A → Z when a platform sort no longer applies
   const table = useRef<HTMLTableElement>(null);
   useLayoutEffect(() => freeze(table.current), [v]);         // each frozen column starts where the ones before it end
   const plat = opts.data?.platforms.find((x) => String(x.id) === f.platform_id)?.name;
   const stmt = opts.data?.statements.find((x) => String(x.id) === f.statement_id);
-  const sorts = [{ value: "amount_desc", label: "Total amount, high → low" }, { value: "amount_asc", label: "Total amount, low → high" },
-    { value: "title_asc", label: "Song name, A → Z" }, { value: "title_desc", label: "Song name, Z → A" },
+  const sorts = [{ value: "title_asc", label: "Song name, A → Z" }, { value: "title_desc", label: "Song name, Z → A" },
+    { value: "amount_desc", label: "Total amount, high → low" }, { value: "amount_asc", label: "Total amount, low → high" },
     ...(plat && v?.platform_revenue ? [{ value: "platform_desc", label: `${plat} revenue, high → low` }, { value: "platform_asc", label: `${plat} revenue, low → high` }] : [])];
   const head = (c: SheetCol) => {
     if (!c.sort) return c.h;
@@ -90,7 +91,7 @@ function MasterSheet({ cid, f, setF }: { cid: number; f: F; setF: (f: F) => void
         <div className="queue-bar">
           <span>Statements:</span>
           <div className="seg" role="radiogroup" aria-label="Statements">
-            {([["CLIENT", "Client statements + platform revenue reports"], ["IPRS", "Statements received from IPRS"]] as const).map(([k, l]) => (
+            {([["CLIENT", "Platform revenue reports"], ["IPRS", "IPRS statements"]] as const).map(([k, l]) => (
               <button key={k} type="button" role="radio" aria-checked={side === k} className={side === k ? "on" : ""}
                       onClick={() => { setSide(k); setOffset(0); setF({ ...f, statement_id: "" }); }}>{l}</button>))}
           </div>
@@ -103,13 +104,13 @@ function MasterSheet({ cid, f, setF }: { cid: number; f: F; setF: (f: F) => void
           <Select size="sm" label="Statement" value={f.statement_id} placeholder="Every statement" onChange={(x) => set("statement_id", x)}
                   options={[{ value: "", label: "Every statement" }, ...(opts.data?.statements ?? []).filter((x) => side === "IPRS" ? x.statement_source === "IPRS" : x.statement_source !== "IPRS" && x.record_type !== "RECORDING_USAGE").map((x) => ({ value: String(x.id), label: x.original_filename, meta: `#${x.id}` }))]} />
           <Select size="sm" label="Sort" value={shown} onChange={order} options={sorts} />
-          <ResetFilters active={side !== "CLIENT" || sort !== "amount_desc" || !!(f.q || f.platform_id || f.from || f.to || f.statement_id)}
-                        onReset={() => { setSide("CLIENT"); setSort("amount_desc"); setF({ ...f, q: "", platform_id: "", from: "", to: "", statement_id: "" }); setOffset(0); }} />
+          <ResetFilters active={side !== "CLIENT" || sort !== "title_asc" || !!(f.q || f.platform_id || f.from || f.to || f.statement_id)}
+                        onReset={() => { setSide("CLIENT"); setSort("title_asc"); setF({ ...f, q: "", platform_id: "", from: "", to: "", statement_id: "" }); setOffset(0); }} />
         </div>
         <div className="actions">
-          <DownloadButton kind="primary" path={`/master/export-statement${qs({ client_id: cid, side, platform_id: f.platform_id, period_from: monthStart(f.from), period_to: monthEnd(f.to), statement_id: f.statement_id })}`}
+          <DownloadButton kind="primary" path={`/master/export-statement${qs({ client_id: cid, side, platform_id: f.platform_id, period_from: monthStart(f.from), period_to: monthEnd(f.to), statement_id: f.statement_id, sort: shown })}`}
                           onError={(m) => toast(m, true)}>Export master statement (.xlsx)</DownloadButton>
-          <Selection parts={[side === "CLIENT" ? "the client's statements and the platform revenue reports" : "statements received from IPRS", plat ?? "all platforms", f.from && f.to ? `${mon(f.from)} – ${mon(f.to)}` : "all periods", stmt && `statement #${stmt.id}`, f.q && `search '${f.q}'`]} />
+          <Selection parts={[side === "CLIENT" ? "the platform revenue reports" : "the IPRS statements", plat ?? "all platforms", f.from && f.to ? `${mon(f.from)} – ${mon(f.to)}` : "all periods", stmt && `statement #${stmt.id}`, f.q && `search '${f.q}'`]} />
         </div>
       </Card>
       <Card>
@@ -159,7 +160,7 @@ function MasterSheet({ cid, f, setF }: { cid: number; f: F; setF: (f: F) => void
 }
 
 type F = { q: string; platform_id: string; from: string; to: string; status: string; mapping: string; money: string; statement_id: string; sort: string };
-const MASTER_FILTERS: F = { q: "", platform_id: "", from: "", to: "", status: "", mapping: "", money: "", statement_id: "", sort: "revenue" };
+const MASTER_FILTERS: F = { q: "", platform_id: "", from: "", to: "", status: "", mapping: "", money: "", statement_id: "", sort: "title" };
 
 function Filters({ f, set, v, full, onReset }: { f: F; set: (k: keyof F, val: string) => void; v?: View; full?: boolean; onReset: () => void }) {
   return (

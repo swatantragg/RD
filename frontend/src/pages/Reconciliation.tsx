@@ -8,35 +8,42 @@ import { Button, Card, Dialog, DownloadButton, Empty, Loading, Money, More, Noti
 import { AddWork, WorkDialog, WorkNumberField, type FoundWork } from "./Catalogue";
 
 const MISSING = "No corresponding IPRS entry found in the statements uploaded.";
-type Setting = { id: number; benchmark_percentage: string; client_interest_pct: string | null; revenue_basis: string; note: string | null; platform_id: number | null };
+type Setting = { id: number; benchmark_percentage: string; client_share_pct: string | null; revenue_basis: string; note: string | null; platform_id: number | null };
 type StRef = { id: number; reference: string | null; filename: string; layout: string; period_start: string | null; period_end: string | null; total: string | null; usage: string | null };
 type Plat = { platform_id: number; platform: string; ready: boolean; year_ready: boolean; status: "READY" | "NO_REVENUE" | "NO_IPRS" | "NO_OVERLAP" | "YEAR_ONLY";
-  iprs: StRef[]; client: StRef[]; platform_reports: StRef[]; revenue: StRef[]; base: "PLATFORM" | "CLIENT" | null;
-  years: { fy: number; label: string; client_months: number; platform_months: number; statement_months: number; iprs_months: number; common_months: number }[];
-  revenue_months: [string, string] | null; usage_months: [string, string] | null; setting: Setting | null; own_benchmark: boolean;
-  suggestions: { period_start: string; period_end: string; iprs_statement: string; revenue_months: number; months: number; complete: boolean; usage_months: number; client_months: number }[] };
-type Options = { platforms: Plat[]; settings: Setting | null; interest_known: boolean;
+  iprs: StRef[]; platform_reports: StRef[];
+  years: { fy: number; label: string; platform_months: number; iprs_months: number; common_months: number }[];
+  revenue_months: [string, string] | null; usage_months: [string, string] | null; setting: Setting | null; own_setting: boolean;
+  suggestions: { period_start: string; period_end: string; iprs_statement: string; revenue_months: number; months: number; complete: boolean; usage_months: number }[] };
+type Options = { platforms: Plat[]; settings: Setting | null;
   others: { category: string; record_type: string; statement_source: string; statements: number }[] };
 
+/** '7 %'; the client share is 100 % while it is not set (the revenue reported is the total). */
+const pct = (v: string | number | null | undefined) => `${Number(v)} %`;
+const shareOf = (s: Setting | null | undefined) => (s?.client_share_pct ? Number(s.client_share_pct) : null);
+
 const PLAT_STATUS: Record<Plat["status"], [Tone, string, string]> = {
-  READY: ["good", "Ready", "The platform revenue (or the client's statements) and IPRS's statements cover the same months"],
+  READY: ["good", "Ready", "The platform revenue and IPRS's statements cover the same months"],
   YEAR_ONLY: ["info", "Yearly only", "They share some months of a financial year, but no IPRS usage period is fully covered"],
-  NO_REVENUE: ["warn", "No platform report", "Only statements from IPRS: upload the platform's revenue report under Statements → Platform reports"],
+  NO_REVENUE: ["warn", "No platform report", "Only IPRS statements: upload the platform's revenue report under Statements → Platform reports"],
   NO_IPRS: ["warn", "No IPRS statement", "Upload the statement received from IPRS under Statements → IPRS statements"],
   NO_OVERLAP: ["warn", "Periods do not meet", "Both are uploaded, but not for the same months"],
 };
+/** Only a platform with both its revenue report and an IPRS statement can be reconciled (and is offered). */
+const both = (x: Plat) => !!x.revenue_months && x.iprs.length > 0;
+const months = (n: number) => `${n} month${n === 1 ? "" : "s"}`;
 const fyOf = (iso: string) => { const [y, m] = iso.split("-").map(Number); return m >= 4 ? y : y - 1; };
 const runPeriod = (r: { run_kind?: string; usage_period_start: string; usage_period_end: string }) =>
   r.run_kind === "YEAR" ? `FY ${fyOf(r.usage_period_start)}-${String(fyOf(r.usage_period_start) + 1).slice(2)} (yearly)` : period(r.usage_period_start, r.usage_period_end);
 type RunRow = { id: number; run_reference: string; run_kind: string; usage_period_start: string; usage_period_end: string; platform_name: string; started_at: string;
-  started_by: string; benchmark_percentage: string; client_interest_pct: string | null; summary: Summary;
+  started_by: string; benchmark_percentage: string; client_interest_pct: string | null; client_share_pct: string | null; summary: Summary;
   review?: { items: number; reviewed: number; needs_info: number } };
 type Summary = { items: number; works: number; calculated: number; compared: number; missing_iprs: number; unmatched_recordings: number; unmatched_works: number;
   previous_revenue?: string; previous_iprs?: string; compared_months?: number; base?: "PLATFORM" | "CLIENT";
   underpaid?: number; shortfall?: string; usage?: string | null; usage_unmatched?: string | null; client_matched?: string | null; client_differences?: number;
-  iprs_compared?: string; revenue_compared?: string; no_platform_revenue?: number;
+  iprs_compared?: string; revenue_compared?: string; total_compared?: string; no_platform_revenue?: number; eligible?: string;
   revenue_matched: string; revenue_unmatched: string; iprs_matched: string; iprs_unmatched: string; reference: string; positive_variance: string;
-  exceptions: Record<string, number>; comparable: boolean; interest_known: boolean; basis_ok: boolean; currency: string | null };
+  exceptions: Record<string, number>; comparable: boolean; basis_ok: boolean; currency: string | null };
 
 export default function Reconciliation({ runId }: { runId?: number }) {
   return <NeedClient>{(cid) => (runId ? <RunPage runId={runId} cid={cid} /> : <Start cid={cid} />)}</NeedClient>;
@@ -54,15 +61,19 @@ function Start({ cid }: { cid: number }) {
   const [to, setTo] = useState("");
   const [busy, setBusy] = useState(false);
   const o = opt.data;
-  const p = o?.platforms.find((x) => String(x.platform_id) === pid) ?? o?.platforms.find((x) => x.ready) ?? o?.platforms[0];
+  const choices = o?.platforms.filter(both) ?? [];
+  const p = choices.find((x) => String(x.platform_id) === pid) ?? choices.find((x) => x.ready) ?? choices[0];
+  const shown = p?.suggestions.filter((g) => g.revenue_months > 0) ?? [];      // IPRS periods the platform revenue meets
+  const hidden = (p?.suggestions.length ?? 0) - shown.length;
   const s = p?.setting ?? o?.settings;
+  const share = shareOf(s);
   return (
     <Page title="Reconciliation">
       <Card><ClientSelect label="Client to reconcile" /></Card>
       <div id="run-recon" className="anchor" />
       <Card title="Run a reconciliation">
-        {!o ? <Loading /> : o.platforms.length === 0 ? (
-          <Empty title="Nothing to reconcile yet">Upload the platform's revenue and usage reports, the client's statements and the statements received from IPRS under <a href="#/statements/platform">Statements</a> (one tab each), in any order.</Empty>
+        {!o ? <Loading /> : choices.length === 0 ? (
+          <Empty title="Nothing to reconcile yet">A platform is offered here once both its revenue report and an IPRS statement are uploaded under <a href="#/statements/platform">Statements</a> (one tab each), in any order.</Empty>
         ) : (
           <form className="form" onSubmit={async (e) => {
             e.preventDefault();
@@ -77,12 +88,12 @@ function Start({ cid }: { cid: number }) {
           }}>
             <label className="field">Platform
               <Select value={p ? String(p.platform_id) : ""} onChange={(v) => { setPid(v); setFrom(""); setTo(""); setFy(""); }}
-                      options={o.platforms.map((x) => ({ value: String(x.platform_id), label: x.platform, tone: PLAT_STATUS[x.status][0],
-                        meta: `${x.platform_reports.length} platform · ${x.client.length} client · ${x.iprs.length} IPRS`, hint: PLAT_STATUS[x.status][2] }))} />
+                      options={choices.map((x) => ({ value: String(x.platform_id), label: x.platform, tone: PLAT_STATUS[x.status][0],
+                        meta: `${x.platform_reports.length} platform · ${x.iprs.length} IPRS`, hint: PLAT_STATUS[x.status][2] }))} />
             </label>
-            <div className="field"><span>Compare</span>
-              <div className="seg" role="radiogroup" aria-label="Compare">
-                {([["PERIOD", "One usage period"], ["YEAR", "A financial year (with the year before)"]] as const).map(([k, l]) => (
+            <div className="field"><span>Compare by</span>
+              <div className="seg" role="radiogroup" aria-label="Compare by">
+                {([["PERIOD", "Months"], ["YEAR", "A financial year (with the year before)"]] as const).map(([k, l]) => (
                   <button key={k} type="button" role="radio" aria-checked={mode === k} className={mode === k ? "on" : ""} onClick={() => setMode(k)}>{l}</button>))}
               </div>
             </div>
@@ -93,34 +104,42 @@ function Start({ cid }: { cid: number }) {
                     {p.years.map((y) => (
                       <button key={y.fy} type="button" className={`chip ${fy === String(y.fy) ? "on" : ""}`} onClick={() => setFy(String(y.fy))}>
                         <b>{y.label}</b>
-                        <span className="small">{p.base === "PLATFORM" ? "platform revenue" : "client statements"} {y.client_months} of 12 months · IPRS {y.iprs_months} of 12</span>
-                        <span className={`small ${y.common_months ? "good-t" : "warn-t"}`}>{y.common_months ? `${y.common_months} month${y.common_months === 1 ? "" : "s"} on both sides are compared` : "no month on both sides yet"}</span>
+                        <span className="small">{p.platform} revenue: {y.platform_months} of 12 months</span>
+                        <span className="small">IPRS statements: {y.iprs_months} of 12 months</span>
+                        <span className={`small ${y.common_months ? "good-t" : "warn-t"}`}>{y.common_months ? `${months(y.common_months)} in both - these are compared` : "no month in both yet"}</span>
                       </button>))}
                   </div>)}
+                {fy && <p className="compare-line">Compares <b>{p.platform} revenue</b> with <b>what IPRS paid</b> for the months of FY {fy}-{String(Number(fy) + 1).slice(2)} that both cover, beside the same months a year before.</p>}
               </div>
             )}
             {p && mode === "PERIOD" && (
-              <div className="field"><span>Usage period</span>
-                <div className="chips">
-                  {p.suggestions.map((g) => (
-                    <button key={g.period_start} type="button" className={`chip ${from === g.period_start.slice(0, 7) && to === g.period_end.slice(0, 7) ? "on" : ""}`}
+              <div className="field"><span>Which months to compare?</span>
+                <span className="muted small">{p.platform}'s revenue for the months the songs were played is compared with what IPRS paid for the same months.
+                  Pick the months of an IPRS statement below, or choose the months yourself.</span>
+                {shown.length > 0 && <div className="chips">
+                  {shown.map((g) => (
+                    <button key={g.period_start + g.period_end} type="button" className={`chip ${from === g.period_start.slice(0, 7) && to === g.period_end.slice(0, 7) ? "on" : ""}`}
                             onClick={() => { setFrom(g.period_start.slice(0, 7)); setTo(g.period_end.slice(0, 7)); }}>
-                      <b>{period(g.period_start, g.period_end)}</b>
-                      <span className="small">IPRS {g.iprs_statement}</span>
-                      <span className={`small ${g.complete ? "good-t" : "warn-t"}`}>{p.base === "PLATFORM" ? "platform revenue" : "client statements"} {g.complete ? "for every month" : `for ${g.revenue_months} of ${g.months} months`}</span>
-                      {p.base === "PLATFORM" && <span className="small muted">plays for {g.usage_months} of {g.months} months{g.client_months ? ` · client statement for ${g.client_months}` : ""}</span>}
+                      <b>{period(g.period_start, g.period_end)} <span className="muted small">({months(g.months)})</span></b>
+                      <span className="small">IPRS statement: {g.iprs_statement}</span>
+                      <span className={`small ${g.complete ? "good-t" : "warn-t"}`}>{p.platform} revenue: {g.complete ? `all ${months(g.months)}` : `only ${g.revenue_months} of ${g.months} months`}</span>
+                      <span className="small muted">{p.platform} plays: {g.usage_months === g.months ? `all ${months(g.months)}` : g.usage_months ? `${g.usage_months} of ${g.months} months` : "none"}</span>
                     </button>))}
-                </div>
+                </div>}
+                {hidden > 0 && <span className="muted small">{hidden === 1 ? "One IPRS statement period is" : `${hidden} IPRS statement periods are`} not shown: no {p.platform} revenue is uploaded for {hidden === 1 ? "its" : "their"} months
+                  ({p.suggestions.filter((g) => !g.revenue_months).map((g) => period(g.period_start, g.period_end)).join(", ")}).</span>}
                 <span className="period-pick">
-                  <label className="field inline">From<input className="input sm" type="month" required value={from} onChange={(e) => setFrom(e.target.value)} /></label>
-                  <label className="field inline">To<input className="input sm" type="month" required value={to} min={from} onChange={(e) => setTo(e.target.value)} /></label>
+                  <label className="field inline">From month<input className="input sm" type="month" required value={from} onChange={(e) => setFrom(e.target.value)} /></label>
+                  <label className="field inline">To month<input className="input sm" type="month" required value={to} min={from} onChange={(e) => setTo(e.target.value)} /></label>
                 </span>
+                {from && to && to >= from && <p className="compare-line">Compares <b>{p.platform} revenue for {period(from, to)}</b> with <b>what IPRS paid for the same months</b>.</p>}
               </div>
             )}
             <div className="box small">
               <b>Calculation basis{p ? ` for ${p.platform}` : ""}</b> (Settings → Reconciliation)
-              <Facts items={[["Expected from IPRS (indicative reference)", s ? `${Number(s.benchmark_percentage)} % of the platform revenue${p?.own_benchmark ? ` (set for ${p.platform})` : " (client-wide value)"}` : "not set"],
-                ["Client interest in the revenue", s?.client_interest_pct ? `${Number(s.client_interest_pct)} % of the revenue counts` : "not set - the whole revenue counts (100 %)"],
+              <Facts items={[["IPRS % (expected from IPRS)", s ? `${pct(s.benchmark_percentage)} of each song's total revenue${p?.own_setting ? ` (set for ${p.platform})` : " (client-wide value)"}` : "not set"],
+                ["Client share", share ? `${pct(share)} - the ${p?.platform ?? "platform"} revenue is the client's share, so the total revenue = revenue ÷ ${pct(share)}`
+                  : "not set - the revenue reported counts as the total (100 %)"],
                 ["Revenue basis", s ? s.revenue_basis.toLowerCase() : ""]]} />
             </div>
             <div className="actions"><Button kind="primary" className="big" type="submit" busy={busy} disabled={!me.can.prepare || (mode === "PERIOD" ? !from || !to : !fy)}>Run reconciliation</Button></div>
@@ -130,7 +149,7 @@ function Start({ cid }: { cid: number }) {
       <Card title="Earlier reconciliations">
         {!runs.data ? <Loading /> : runs.data.length === 0 ? <p className="muted">None yet.</p> : (
           <ScrollX label="Earlier reconciliations"><table className="tbl">
-            <thead><tr><th>Reference</th><th>Platform</th><th>Usage period</th><th className="num">Works compared</th><th className="num">Underpaid</th><th className="num">Shortfall</th><th className="num">No IPRS entry</th><th className="num">Unmatched</th><th>Benchmark</th><th>Review</th><th>Run</th></tr></thead>
+            <thead><tr><th>Reference</th><th>Platform</th><th>Months compared</th><th className="num">Works compared</th><th className="num">Underpaid</th><th className="num">Shortfall</th><th className="num">No IPRS entry</th><th className="num">Unmatched</th><th>IPRS % · client share</th><th>Review</th><th>Run</th></tr></thead>
             <tbody>{runs.data.map((r) => (
               <tr key={r.id} className="click" onClick={() => go(`reconciliation/${r.id}`)}>
                 <td><b>{r.run_reference}</b></td><td>{r.platform_name}</td><td className="nowrap">{runPeriod(r)}</td>
@@ -139,7 +158,7 @@ function Start({ cid }: { cid: number }) {
                 <td className="num">{r.summary.shortfall != null && Number(r.summary.shortfall) > 0 ? <Money v={r.summary.shortfall} /> : <span className="blank">—</span>}</td>
                 <td className="num">{int(r.summary.missing_iprs)}</td>
                 <td className="num">{int(r.summary.unmatched_recordings + r.summary.unmatched_works)}</td>
-                <td className="small">{Number(r.benchmark_percentage)} %{r.client_interest_pct ? ` × ${Number(r.client_interest_pct)} %` : ""}</td>
+                <td className="small nowrap">{pct(r.benchmark_percentage)}{r.client_share_pct ? ` · ${pct(r.client_share_pct)}` : r.client_interest_pct ? ` × ${pct(r.client_interest_pct)} interest` : ""}</td>
                 <td className="small nowrap"><ReviewProgress v={r.review} /></td>
                 <td className="small nowrap">{when(r.started_at)} · {r.started_by}</td>
               </tr>))}</tbody>
@@ -171,8 +190,8 @@ function Platforms({ o, onPick }: { o: Options; onPick: (platformId: number) => 
     <Card title={`Platforms in this client's statements (${o.platforms.length})`}>
       {o.platforms.length === 0 ? <Empty title="No platform yet">Upload statements under <a href="#/statements/platform">Statements</a>.</Empty> : (
         <ScrollX label="Platforms"><table className="tbl">
-          <thead><tr><th>Platform</th><th>Platform reports</th><th>Client statements</th><th>IPRS statements</th>
-            <th>Benchmark</th><th>Can it be reconciled?</th><th></th></tr></thead>
+          <thead><tr><th>Platform</th><th>Platform reports</th><th>IPRS statements</th>
+            <th>IPRS % · client share</th><th>Can it be reconciled?</th><th></th></tr></thead>
           <tbody>{o.platforms.map((x) => {
             const [tone, text, why] = PLAT_STATUS[x.status];
             return (
@@ -180,11 +199,10 @@ function Platforms({ o, onPick }: { o: Options; onPick: (platformId: number) => 
                 <td><b>{x.platform}</b></td>
                 <td className="small">{x.platform_reports.length ? <>{x.revenue_months ? <>revenue {period(x.revenue_months[0], x.revenue_months[1])}</> : <span className="muted">no revenue</span>}
                   <div className="muted">{x.usage_months ? `usage ${period(x.usage_months[0], x.usage_months[1])}` : "no usage report"}</div></> : <span className="muted">—</span>}</td>
-                <td className="small">{side(x.client)}</td>
                 <td className="small">{side(x.iprs)}</td>
-                <td className="small nowrap">{x.setting ? `${Number(x.setting.benchmark_percentage)} %` : "not set"}{x.own_benchmark && <div className="muted">own value</div>}</td>
+                <td className="small nowrap">{x.setting ? `${pct(x.setting.benchmark_percentage)} · ${shareOf(x.setting) ? pct(shareOf(x.setting)) : "100 % (not set)"}` : "not set"}{x.own_setting && <div className="muted">own values</div>}</td>
                 <td><Pill tone={tone}>{text}</Pill><div className="muted small">{why}</div></td>
-                <td className="num"><Button kind={x.ready || x.year_ready ? "primary" : "ghost"} className="sm" onClick={() => onPick(x.platform_id)}>Choose</Button></td>
+                <td className="num">{both(x) && <Button kind={x.ready || x.year_ready ? "primary" : "ghost"} className="sm" onClick={() => onPick(x.platform_id)}>Choose</Button>}</td>
               </tr>);
           })}</tbody>
         </table></ScrollX>
@@ -217,7 +235,7 @@ const BAND: Record<string, [string, string]> = { SOURCE: ["#D8E9A8", "#F4F9E6"],
 const fill = (k: string) => ({ "--fill": BAND[k][0] }) as CSSProperties;
 const tint = (k: string) => ({ "--tint": BAND[k][1] }) as CSSProperties;
 type Item = { id: number; item_no: number; item_kind: string; work_id: number | null; internal_work_number: string | null; work_title: string | null; isrcs: string[];
-  sound_recording_revenue: string | null; revenue_lines: number; eligible_revenue_basis: string | null; client_interest_share: string | null;
+  sound_recording_revenue: string | null; revenue_lines: number; eligible_revenue_basis: string | null; client_interest_share: string | null; client_share_pct: string | null;
   iprs_client_share: string | null; benchmark_percentage: string | null; reference_benchmark_amount: string | null; iprs_royalty_amount: string | null;
   iprs_lines: number; observed_percentage: string | null; indicative_variance: string | null; mapping_status: string; data_validation_status: string;
   calculation_status: string; exception_status: string; later_statement_status: string; review_status: string; recommended_action: string;
@@ -251,7 +269,7 @@ function eligible(i: Item): boolean {
   return under(i) || (i.client_iprs_difference !== null && Number(i.client_iprs_difference) > 0.005);
 }
 
-const RUN_FILTERS = { kind: "WORK", exception: "", mapping: "", calc: "", review: "", q: "", sort: "revenue", variance: "" };
+const RUN_FILTERS = { kind: "WORK", exception: "", mapping: "", calc: "", review: "", q: "", sort: "title", variance: "" };
 const VARIANCE = [{ value: "", label: "Any result" }, { value: "underpaid", label: "Underpaid by IPRS" },
   { value: "client_diff", label: "Client statement ≠ IPRS paid" }];
 
@@ -278,7 +296,9 @@ function RunPage({ runId, cid }: { runId: number; cid: number }) {
   const yearly = r.run_kind === "YEAR";
   const L = rv.data.labels;
   const bench = Number(r.benchmark_percentage);
+  const share = r.client_share_pct === null ? null : Number(r.client_share_pct);   // null: a run before 1.6.0
   const platformRun = (s.base ?? r.source_snapshot.base ?? "PLATFORM") === "PLATFORM" && !!r.source_snapshot.platform_reports;
+  const hasCli = (rv.data.blocks ?? []).some((b) => b.side === "CLIENT");            // runs before 1.6.0 only
   const clearSel = () => { setTicked(new Set()); setElig(new Set()); };
   const set = (k: string, v: string) => { setF({ ...f, [k]: v }); setOffset(0); if (k !== "sort") clearSel(); };
   const rows = items.data?.rows ?? [];
@@ -315,78 +335,76 @@ function RunPage({ runId, cid }: { runId: number; cid: number }) {
   const sel = Array.from(ticked);
   const selEnq = sel.filter((id) => elig.has(id));
   const allTicked = total > 0 && sel.length >= total;
-  const exportParams = { kind: f.kind, exception: f.exception, mapping: f.mapping, calc: f.calc, review: f.review, q: f.q, variance: f.variance };
+  const exportParams = { kind: f.kind, exception: f.exception, mapping: f.mapping, calc: f.calc, review: f.review, q: f.q, variance: f.variance, sort: f.sort };
   const snapList = (xs: Snap[] | undefined, what: string) => (xs ?? []).map((x) => <li key={what + x.id}>{what}: <a href={`#/statements/${x.id}`}>#{x.id} {x.file}</a></li>);
+  // received % of the total revenue of the works compared, and the variance % = IPRS % - received % (7 % - 1 % = 6 %)
+  const base = Number(s.total_compared ?? s.revenue_compared ?? 0);
+  const got = base > 0 && s.iprs_compared != null ? Math.round(Number(s.iprs_compared) / base * 10000) / 100 : null;
+  const cm = r.compared_months?.length ?? 0;
   return (
     <Page title={`${r.platform_name} · ${runPeriod(r)}`}
-          intro={<>{r.run_reference} · run {when(r.started_at)} by {r.started_by_name} · expected = {bench} % of the {r.client_interest_pct ? `eligible revenue (client interest ${Number(r.client_interest_pct)} %)` : "platform revenue"} · {r.revenue_basis.toLowerCase()} revenue
-            {yearly && <> · {r.compared_months?.length ?? 0} month{r.compared_months?.length === 1 ? "" : "s"} compared{r.previous_period_start ? `, year before ${period(r.previous_period_start, r.previous_period_end)}` : ""}</>}</>}
+          intro={yearly ? <>Compares <b>{r.platform_name} revenue</b> with <b>what IPRS paid</b> for the {cm} month{cm === 1 ? "" : "s"} of {runPeriod(r).replace(" (yearly)", "")} that both cover{r.previous_period_start ? `, beside the same months a year before (${period(r.previous_period_start, r.previous_period_end)})` : ""}.</>
+            : <>Compares <b>{r.platform_name} revenue for {period(r.usage_period_start, r.usage_period_end)}</b> with <b>what IPRS paid for the same months</b>.</>}
           actions={<>
             <Button kind="ghost" onClick={() => go("reconciliation")}>All reconciliations</Button>
             {me.can.prepare && <Button busy={allBusy} onClick={raiseQuery}>Raise a query to IPRS</Button>}
             <DownloadButton kind="primary" path={`/reconciliation/runs/${runId}/report${qs(exportParams)}`} onError={(m) => toast(m, true)}>Export report</DownloadButton>
           </>}>
-      <Notice tone="info">Indicative figures - not amounts payable by IPRS.</Notice>
       {r.notes.length > 0 && <Card tone="warn" title="Comparability notes"><ul className="plain">{r.notes.map((n, i) => <li key={i}>{n}</li>)}</ul></Card>}
       {rv.data.later_statements.statements.length > 0 && (
         <Notice tone="warn">Later IPRS statements were uploaded after this run and concern {rv.data.later_statements.items} item(s):
           {" "}{rv.data.later_statements.statements.map(([id, fn]) => <a key={id} href={`#/statements/${id}`}>{fn} </a>)}. Review them before preparing an enquiry, or run the reconciliation again.</Notice>
       )}
-      <div className="summary">
-        {platformRun ? <>
-          <div><span>Works underpaid by IPRS</span><b className={s.underpaid ? "under-t" : ""}>{int(s.underpaid ?? 0)}</b>
-            {s.underpaid ? <button type="button" className="link small" onClick={() => { setF({ ...RUN_FILTERS, variance: "underpaid", sort: "variance" }); setOffset(0); clearSel(); }}>show them</button> : null}</div>
-          <div><span>[Calculated] Shortfall of the underpaid works</span><b><Money v={s.shortfall ?? null} /></b></div>
-          <div><span>Works compared with IPRS</span><b>{int(s.compared)}</b></div>
-          <div><span>Works with no IPRS entry</span><b>{int(s.missing_iprs)}</b></div>
-          <div><span>[Platform] Revenue on catalogue works</span><b><Money v={s.revenue_matched} /></b></div>
-          <div><span>[Platform] Plays on catalogue works</span><b>{s.usage ? int(Number(s.usage)) : <span className="muted">no usage report</span>}</b></div>
-          <div><span>[Calculated] Expected ({bench} % of the revenue)</span><b>{s.calculated ? <Money v={s.reference} /> : <span className="muted">not calculated</span>}</b></div>
-          <div><span>[IPRS] Paid on catalogue works</span><b><Money v={s.iprs_matched} /></b>
-            {s.revenue_compared && Number(s.revenue_compared) > 0 && s.iprs_compared ? <span className="muted small">{(Number(s.iprs_compared) / Number(s.revenue_compared) * 100).toFixed(2)} % of the revenue of the works compared</span> : null}</div>
-          <div><span>[Client] Client statements on catalogue works</span><b>{s.client_matched ? <Money v={s.client_matched} /> : <span className="muted">none for this period</span>}</b></div>
-          <div><span>Revenue not linked to a catalogue work</span><b><Money v={s.revenue_unmatched} /></b></div>
-        </> : <>
-          <div><span>Works compared with IPRS</span><b>{int(s.compared)}</b></div>
-          <div><span>Works with no IPRS entry</span><b>{int(s.missing_iprs)}</b></div>
-          <div><span>[Client] Statements on catalogue works</span><b><Money v={s.client_matched ?? s.revenue_matched} /></b></div>
-          <div><span>[IPRS] Paid on catalogue works</span><b><Money v={s.iprs_matched} /></b></div>
-          <div><span>Client statement ≠ IPRS paid</span><b>{int(s.client_differences ?? 0)}</b></div>
-        </>}
-        <div><span>IPRS money not linked to a catalogue work</span><b><Money v={s.iprs_unmatched} /></b></div>
-        {yearly && <div><span>Year before: revenue · IPRS paid</span><b>{s.previous_revenue == null && s.previous_iprs == null ? <span className="muted">no statements for those months</span> : <><Money v={s.previous_revenue ?? null} /> · <Money v={s.previous_iprs ?? null} /></>}</b></div>}
-        <div><span>Items reviewed</span><b>{int(rv.data.reviewed.reviewed)} of {int(rv.data.reviewed.items)}{rv.data.reviewed.items > 0 && rv.data.reviewed.reviewed >= rv.data.reviewed.items && <span className="good-t"> ✓ all reviewed</span>}</b>
-          {rv.data.reviewed.needs_info > 0 && <span className="warn-t small">{int(rv.data.reviewed.needs_info)} need{rv.data.reviewed.needs_info === 1 ? "s" : ""} information</span>}</div>
-      </div>
-      <More label="Statements used in this run">
-        <ul className="plain small">
-          {r.source_snapshot.platform_reports ? <>{snapList(r.source_snapshot.platform_reports, "Platform report")}{snapList(r.source_snapshot.client_statements, "Client statement")}</>
-            : snapList(r.source_snapshot.revenue_statements, "Client (source revenue)")}
-          {snapList(r.source_snapshot.iprs_statements, "IPRS")}
-          <li className="muted">Snapshot fingerprint {r.source_snapshot_sha256.slice(0, 16)}…</li></ul>
-      </More>
       <Card>
-        <div className="tiles small-tiles">
-          {rv.data.exceptions.map((e) => (
-            <button key={e.type} className={`tile ${f.exception === e.type ? "on" : ""}`} onClick={() => { setF({ ...f, exception: f.exception === e.type ? "" : e.type, kind: "" }); setOffset(0); clearSel(); }}>
-              <span className="tile-n">{int(e.open)}</span><span className="tile-t">{e.label}</span>
-              <span className="tile-s">{e.open ? "to review" : <span className="good-t">✓ all reviewed</span>}{e.reviewed ? ` · ${int(e.reviewed)} reviewed` : ""}{e.closed ? ` · ${int(e.closed)} closed` : ""}</span>
-            </button>))}
+        <div className="summary">
+          <div><span>Works compared with IPRS</span><b>{int(s.compared)}</b></div>
+          {platformRun ? <>
+            <div><span>[Platform] Revenue on catalogue works{share !== null && share !== 100 ? ` (the client's ${share} % share)` : ""}</span><b><Money v={s.revenue_matched} /></b></div>
+            {share !== null && share !== 100 && <div><span>[Calculated] Total revenue (100 %) of the calculated works</span><b>{s.calculated ? <Money v={s.eligible ?? null} /> : <span className="muted">not calculated</span>}</b></div>}
+            <div><span>[Calculated] Expected ({bench} % of the {share !== null && share !== 100 ? "total " : ""}revenue)</span><b>{s.calculated ? <Money v={s.reference} /> : <span className="muted">not calculated</span>}</b></div>
+            <div><span>[IPRS] Received on catalogue works</span><b><Money v={s.iprs_matched} /></b>
+              {got !== null && <span className="muted small">{got.toFixed(2)} % of the {s.total_compared ? "total " : ""}revenue of the works compared</span>}</div>
+            <div><span>[Calculated] Variance % ({bench} % − received %)</span><b className={got !== null && bench - got > 0.005 ? "under-t" : ""}>{got !== null ? `${(bench - got).toFixed(2)} %` : <span className="muted">not calculated</span>}</b>
+              {got !== null && <span className="muted small">{bench} % expected − {got.toFixed(2)} % received</span>}</div>
+            <div><span>[Calculated] Shortfall (variance amount) of the underpaid works</span><b className={Number(s.shortfall ?? 0) > 0 ? "under-t" : ""}><Money v={s.shortfall ?? null} /></b></div>
+            <div><span>[Platform] Plays on catalogue works</span><b>{s.usage ? int(Number(s.usage)) : <span className="muted">no usage report</span>}</b></div>
+            {s.client_matched != null && <div><span>[Client] Client statements on catalogue works</span><b><Money v={s.client_matched} /></b></div>}
+            <div><span>Revenue not linked to a catalogue work</span><b><Money v={s.revenue_unmatched} /></b></div>
+          </> : <>
+            <div><span>[Client] Statements on catalogue works</span><b><Money v={s.client_matched ?? s.revenue_matched} /></b></div>
+            <div><span>[IPRS] Paid on catalogue works</span><b><Money v={s.iprs_matched} /></b></div>
+            <div><span>Client statement ≠ IPRS paid</span><b>{int(s.client_differences ?? 0)}</b></div>
+          </>}
+          <div><span>IPRS money not linked to a catalogue work</span><b><Money v={s.iprs_unmatched} /></b></div>
+          {yearly && <div><span>Year before: revenue · IPRS paid</span><b>{s.previous_revenue == null && s.previous_iprs == null ? <span className="muted">no statements for those months</span> : <><Money v={s.previous_revenue ?? null} /> · <Money v={s.previous_iprs ?? null} /></>}</b></div>}
+          <div><span>Items reviewed</span><b>{int(rv.data.reviewed.reviewed)} of {int(rv.data.reviewed.items)}{rv.data.reviewed.items > 0 && rv.data.reviewed.reviewed >= rv.data.reviewed.items && <span className="good-t"> ✓ all reviewed</span>}</b>
+            {rv.data.reviewed.needs_info > 0 && <span className="warn-t small">{int(rv.data.reviewed.needs_info)} need{rv.data.reviewed.needs_info === 1 ? "s" : ""} information</span>}</div>
         </div>
+        {rv.data.exceptions.length > 0 && <>
+          <h3 className="tiles-h">To review <span className="muted small">- click one to list its items</span></h3>
+          <div className="tiles small-tiles">
+            {rv.data.exceptions.map((e) => (
+              <button key={e.type} className={`tile ${f.exception === e.type ? "on" : ""}`} onClick={() => { setF({ ...f, exception: f.exception === e.type ? "" : e.type, kind: "" }); setOffset(0); clearSel(); }}>
+                <span className="tile-n">{int(e.open)}</span><span className="tile-t">{e.label}</span>
+                <span className="tile-s">{e.open ? "to review" : <span className="good-t">✓ all reviewed</span>}{e.reviewed ? ` · ${int(e.reviewed)} reviewed` : ""}{e.closed ? ` · ${int(e.closed)} closed` : ""}</span>
+              </button>))}
+          </div></>}
+      </Card>
+      <Card>
         <div className="toolbar">
           <div className="seg" role="radiogroup" aria-label="Item type">
             {[["WORK", "Works"], ["UNMATCHED_RECORDING", "Unmatched recordings"], ["UNMATCHED_WORK", "Works not in catalogue"], ["", "All"]].map(([k, l]) => (
               <button key={k} type="button" className={f.kind === k ? "on" : ""} onClick={() => set("kind", k)}>{l}</button>))}
           </div>
           <input className="input" placeholder="Find a title, work number or ISRC" value={f.q} onChange={(e) => set("q", e.target.value)} />
-          <Select size="sm" label="Result" value={f.variance} placeholder="Any result" onChange={(v) => set("variance", v)} options={VARIANCE} />
+          <Select size="sm" label="Result" value={f.variance} placeholder="Any result" onChange={(v) => set("variance", v)} options={VARIANCE.filter((x) => hasCli || x.value !== "client_diff")} />
           <Select size="sm" label="Calculation" value={f.calc} placeholder="Any calculation" onChange={(v) => set("calc", v)}
                   options={[{ value: "", label: "Any calculation" }, ...Object.entries(L.calc).map(([value, label]) => ({ value, label }))]} />
           <Select size="sm" label="Review" value={f.review} placeholder="Any review status" onChange={(v) => set("review", v)}
                   options={[{ value: "", label: "Any review status" }, ...Object.entries(L.review).map(([value, label]) => ({ value, label }))]} />
           <Select size="sm" label="Sort" value={f.sort} onChange={(v) => set("sort", v)}
-                  options={[{ value: "revenue", label: "Most revenue first" }, { value: "variance", label: "Largest shortfall first" },
-                    { value: "observed", label: "Lowest % paid first" }, { value: "iprs", label: "Most paid by IPRS first" }, { value: "title", label: "Title" }, { value: "no", label: "Item number" }]} />
+                  options={[{ value: "title", label: "Song name, A → Z" }, { value: "revenue", label: "Most revenue first" }, { value: "variance", label: "Largest shortfall first" },
+                    { value: "observed", label: "Lowest % received first" }, { value: "iprs", label: "Most received from IPRS first" }, { value: "no", label: "Item number" }]} />
           <ResetFilters active={changed(f, RUN_FILTERS)} onReset={() => { setF(RUN_FILTERS); setOffset(0); clearSel(); }} />
         </div>
         {me.can.prepare && (sel.length === 0 ? (
@@ -413,14 +431,15 @@ function RunPage({ runId, cid }: { runId: number; cid: number }) {
           const blocks = rv.data!.blocks ?? [];
           const sides = (["PLATFORM", "CLIENT", "IPRS"] as const).map((k) => [k, blocks.filter((b) => b.side === k)] as const).filter(([, bs]) => bs.length > 0);
           const band: Record<string, [string, string]> = { PLATFORM: ["SOURCE", r.platform_name], CLIENT: ["CLIENT", `Client statement (${r.client_code})`], IPRS: ["IPRS", "IPRS royalty"] };
-          const hasCli = blocks.some((b) => b.side === "CLIENT");
-          const calc = platformRun ? 6 + (hasCli ? 1 : 0) : 2;
-          const interest = r.client_interest_pct ? Number(r.client_interest_pct) : null;     // expected = bench % of this revenue
+          // the check: total revenue (100 %), the client's share as reported, expected, received, received %, variance
+          const split = share !== null;                       // runs before 1.6.0 have no client share column
+          const calc = platformRun ? 6 + (split ? 1 : 0) + (hasCli ? 1 : 0) : 2;
+          const interest = r.client_interest_pct ? Number(r.client_interest_pct) : null;     // runs before 1.6.0 only
           const cell = (i: Item, b: Block) => i.blocks?.[b.key];
           return (
             <ScrollX className="sheet-wrap" label="Reconciliation items">
               <table className="skv recon-skv blocks" ref={(t) => freeze(t)}>
-                <colgroup><col span={3} />{sides.map(([k, bs]) => <col key={k} span={bs.length * 5} style={tint(band[k][0])} />)}
+                <colgroup><col span={3} />{sides.map(([k, bs]) => <col key={k} span={bs.length * 4} style={tint(band[k][0])} />)}
                   <col span={calc} style={tint("CALC")} />{yearly && <col span={4} style={tint("YOY")} />}<col span={3} style={tint("STATUS")} /></colgroup>
                 <thead>
                   <tr className="h1">
@@ -429,29 +448,32 @@ function RunPage({ runId, cid }: { runId: number; cid: number }) {
                              onChange={(e) => togglePage(e.target.checked)} />}Internal No</span></th>
                     <th rowSpan={3} className="fz fz1 band-id">Song name</th>
                     <th rowSpan={3} className="fz fz2 band-id">ISRC</th>
-                    {sides.map(([k, bs]) => <th key={k} colSpan={bs.length * 5} className="band" style={fill(band[k][0])}>{band[k][1]}</th>)}
-                    <th colSpan={calc} className="band" style={fill("CALC")}>{platformRun ? `Check: expected (${bench} %) vs paid` : "Check"}</th>
+                    {sides.map(([k, bs]) => <th key={k} colSpan={bs.length * 4} className="band" style={fill(band[k][0])}>{band[k][1]}</th>)}
+                    <th colSpan={calc} className="band" style={fill("CALC")}>{platformRun ? `Check: expected (${bench} %${split && share !== 100 ? " of total revenue" : ""}) vs paid` : "Check"}</th>
                     {yearly && <th colSpan={4} className="band" style={fill("YOY")}>{r.previous_period_start ? `Year before (${period(r.previous_period_start, r.previous_period_end)})` : "Year before"}</th>}
                     <th colSpan={3} className="band" style={fill("STATUS")}>Status and review</th>
                   </tr>
                   <tr className="h2">
                     {sides.map(([k, bs]) => bs.map((b) => [
                       <th key={b.key + "a"} rowSpan={2} className="num band" style={fill(band[k][0])}>Amount</th>,
-                      <th key={b.key + "d"} rowSpan={2} className="band" style={fill(band[k][0])}>Date</th>,
-                      <th key={b.key + "p"} colSpan={2} className="band" style={fill(band[k][0])}>Period</th>,
+                      k === "PLATFORM" ? <th key={b.key + "p"} colSpan={2} className="band" style={fill(band[k][0])}>Period</th>
+                        : [<th key={b.key + "d"} rowSpan={2} className="band" style={fill(band[k][0])}>Date</th>,
+                          <th key={b.key + "p"} rowSpan={2} className="band" style={fill(band[k][0])}>Period</th>],
                       <th key={b.key + "n"} rowSpan={2} className="band sep" style={fill(band[k][0])}>Distribution No</th>]))}
-                    {platformRun && <><th rowSpan={2} className="num band" style={fill("CALC")}>{interest === null ? "Total revenue" : `Revenue counted (${interest} % client interest)`}</th>
+                    {platformRun && <><th rowSpan={2} className="num band" style={fill("CALC")}>{split ? "Total revenue (100 %)" : interest === null ? "Total revenue" : `Revenue counted (${interest} % client interest)`}</th>
+                      {split && <th rowSpan={2} className="num band" style={fill("CALC")} title="The revenue the platform reported: the client's share of the total">Client share ({share} %)</th>}
                       <th rowSpan={2} className="num band" style={fill("CALC")}>Expected value ({bench} %)</th></>}
-                    <th rowSpan={2} className="num band" style={fill("CALC")}>IPRS paid</th>
-                    {platformRun && <><th rowSpan={2} className="num band" style={fill("CALC")}>Paid % of revenue</th>
-                      <th rowSpan={2} className="num band" style={fill("CALC")}>Variance %</th><th rowSpan={2} className={`num band ${hasCli ? "" : "sep"}`} style={fill("CALC")}>Variance amount</th></>}
+                    <th rowSpan={2} className="num band" style={fill("CALC")}>Received from IPRS</th>
+                    {platformRun && <><th rowSpan={2} className="num band" style={fill("CALC")}>Received % of {split && share !== 100 ? "total revenue" : "revenue"}</th>
+                      <th rowSpan={2} className="num band" style={fill("CALC")} title={`The difference in percentage points: ${bench} % expected − the % received`}>Variance % ({bench} % − received %)</th>
+                      <th rowSpan={2} className={`num band ${hasCli ? "" : "sep"}`} style={fill("CALC")}>Variance amount</th></>}
                     {(hasCli || !platformRun) && <th rowSpan={2} className="num band sep" style={fill("CALC")}>Client − IPRS</th>}
                     {yearly && <><th rowSpan={2} className="num band" style={fill("YOY")}>Revenue</th><th rowSpan={2} className="num band" style={fill("YOY")}>Change</th>
                       <th rowSpan={2} className="num band" style={fill("YOY")}>IPRS paid</th><th rowSpan={2} className="num band sep" style={fill("YOY")}>Change</th></>}
                     <th rowSpan={2} className="band" style={fill("STATUS")}>Links</th><th rowSpan={2} className="band" style={fill("STATUS")}>Exceptions</th><th rowSpan={2} className="band" style={fill("STATUS")}>Review</th>
                   </tr>
                   <tr className="h3">
-                    {sides.map(([k, bs]) => bs.map((b) => [
+                    {sides.filter(([k]) => k === "PLATFORM").map(([k, bs]) => bs.map((b) => [
                       <th key={b.key + "pp"} className="band" style={fill(band[k][0])}>Period</th>,
                       <th key={b.key + "pu"} className="num band" style={fill(band[k][0])} title={`Plays the platform reported for the song in ${b.period_label}`}>Usage
                         {b.usage_label !== "plays" && <div className="muted small">{b.usage_label}</div>}</th>]))}
@@ -466,16 +488,18 @@ function RunPage({ runId, cid }: { runId: number; cid: number }) {
                     <td className="fz fz1"><div className="clip"><b title={i.work_title ?? undefined}>{i.work_title ?? (i.isrcs[0] || "No ISRC")}</b>
                       {i.enquiry && <div className="small"><a href={`#/enquiries/${i.enquiry.id}`} onClick={(e) => e.stopPropagation()}>{i.enquiry.reference}</a></div>}</div></td>
                     <td className="fz fz2 small mono" title={i.isrcs.join(", ")}>{i.isrcs.slice(0, 2).join(", ")}{i.isrcs.length > 2 && <span className="muted"> +{i.isrcs.length - 2}</span>}</td>
-                    {sides.map(([, bs]) => bs.map((b) => {
+                    {sides.map(([k, bs]) => bs.map((b) => {
                       const v = cell(i, b);
                       return [
                         <td key={b.key + "a"} className="num b"><Amount v={v?.amount ?? null} /></td>,
-                        <td key={b.key + "d"} className="small">{v ? day(b.date) : ""}</td>,
-                        <td key={b.key + "p"} className="small">{v ? b.period_label : ""}</td>,
-                        <td key={b.key + "u"} className="num"><Plays v={v?.usage} /></td>,
+                        k === "PLATFORM" ? [<td key={b.key + "p"} className="small">{v ? b.period_label : ""}</td>,
+                          <td key={b.key + "u"} className="num"><Plays v={v?.usage} /></td>]
+                          : [<td key={b.key + "d"} className="small">{v ? day(b.date) : ""}</td>,
+                            <td key={b.key + "p"} className="small">{v ? b.period_label : ""}</td>],
                         <td key={b.key + "n"} className="small sep">{v ? b.reference : ""}</td>];
                     }))}
-                    {platformRun && <><td className="num"><Amount v={interest === null ? i.sound_recording_revenue : i.eligible_revenue_basis} /></td>
+                    {platformRun && <><td className="num"><Amount v={split || interest !== null ? i.eligible_revenue_basis : i.sound_recording_revenue} /></td>
+                      {split && <td className="num"><Amount v={i.sound_recording_revenue} /></td>}
                       <td className="num"><Amount v={i.reference_benchmark_amount} /></td></>}
                     <td className="num b">{i.iprs_royalty_amount === null && i.item_kind === "WORK" && i.open_exceptions.includes("MISSING_IPRS_ENTRY")
                       ? <span className="bad-t small" title={MISSING}>No IPRS entry</span> : <Amount v={i.iprs_royalty_amount} />}</td>
@@ -497,6 +521,18 @@ function RunPage({ runId, cid }: { runId: number; cid: number }) {
         })()}
         {items.data && <Pager total={items.data.total} offset={offset} size={100} onChange={setOffset} />}
       </Card>
+      <div className="run-meta small muted">
+        <p>{r.run_reference} · run {when(r.started_at)} by {r.started_by_name} · expected = {bench} % of the {share !== null ? `total revenue${share !== 100 ? ` (revenue ÷ ${share} % client share)` : ""}` : r.client_interest_pct ? `eligible revenue (client interest ${Number(r.client_interest_pct)} %)` : "platform revenue"} · {r.revenue_basis.toLowerCase()} revenue
+          {yearly && <> · {cm} month{cm === 1 ? "" : "s"} compared{r.previous_period_start ? `, year before ${period(r.previous_period_start, r.previous_period_end)}` : ""}</>}</p>
+        <p>Indicative figures - not amounts payable by IPRS.</p>
+        <More label="Statements used in this run">
+          <ul className="plain small">
+            {r.source_snapshot.platform_reports ? <>{snapList(r.source_snapshot.platform_reports, "Platform report")}{snapList(r.source_snapshot.client_statements, "Client statement")}</>
+              : snapList(r.source_snapshot.revenue_statements, "Client (source revenue)")}
+            {snapList(r.source_snapshot.iprs_statements, "IPRS")}
+            <li className="muted">Snapshot fingerprint {r.source_snapshot_sha256.slice(0, 16)}…</li></ul>
+        </More>
+      </div>
       {open && <ItemDialog itemId={open} labels={L} onClose={() => setOpen(null)} />}
       {draft && <DraftDialog cid={cid} runId={runId} ids={selEnq} known={known} laterInRun={rv.data.later_statements.items > 0}
                              onClose={() => setDraft(false)} onDone={(id) => go(`enquiries/${id}`)} />}
@@ -572,21 +608,24 @@ function ItemDialog({ itemId, labels, onClose }: { itemId: number; labels: RunVi
             <div>
               <h2>Source values</h2>
               <Facts items={[["IPRS work number", i.internal_work_number ?? "—"], ["ISRCs", i.isrcs.join(", ") || "—"],
-                ["Platform revenue (platform reports)", <><Amount v={i.sound_recording_revenue} missing="none found" /> <span className="muted small">{int(i.revenue_lines)} lines</span></>],
+                ["Platform revenue (platform reports)", <><Amount v={i.sound_recording_revenue} missing="none found" /> <span className="muted small">{int(i.revenue_lines)} lines{i.client_share_pct && Number(i.client_share_pct) !== 100 ? ` · the client's ${Number(i.client_share_pct)} % share` : ""}</span></>],
+                ...(i.client_share_pct && Number(i.client_share_pct) !== 100 ? [["Total revenue (100 %)", i.eligible_revenue_basis != null ? <><Amount v={i.eligible_revenue_basis} /> <span className="muted small">= revenue ÷ {Number(i.client_share_pct)} %</span></> : <span className="muted">not calculated</span>] as [string, React.ReactNode]] : []),
                 ["Usage (plays)", i.usage_plays != null ? `${int(Number(i.usage_plays))} plays` : <span className="muted">no usage report for these months</span>],
-                ["Client statement", i.client_statement_amount != null ? <Amount v={i.client_statement_amount} /> : <span className="muted">no client statement line</span>],
-                ["IPRS paid (IPRS statements)", i.iprs_royalty_amount === null && i.item_kind === "WORK" ? <span className="bad-t">{MISSING}</span> : <Amount v={i.iprs_royalty_amount} />],
+                ...(i.client_statement_lines > 0 ? [["Client statement", <Amount v={i.client_statement_amount} />] as [string, React.ReactNode]] : []),
+                ["Received from IPRS (IPRS statements)", i.iprs_royalty_amount === null && i.item_kind === "WORK" ? <span className="bad-t">{MISSING}</span> : <Amount v={i.iprs_royalty_amount} />],
                 ...(i.previous_revenue !== null || i.previous_iprs_royalty !== null ? [["Year before: revenue · IPRS royalty", <><Amount v={i.previous_revenue} /> · <Amount v={i.previous_iprs_royalty} /></>] as [string, React.ReactNode]] : []),
                 ["Client share on the IPRS statement", i.iprs_client_share ? `${Number(i.iprs_client_share)} %` : "—"], ["Currency", i.currency ?? "not established"], ["Territory", i.territory ?? "not stated"]]} />
             </div>
             <div>
               <h2>Check: expected vs paid</h2>
               <Facts items={[["Calculation", <Pill tone={CALC_TONE[i.calculation_status]}>{labels.calc[i.calculation_status]}</Pill>],
-                ["Expected from IPRS", i.reference_benchmark_amount != null ? <><Amount v={i.reference_benchmark_amount} /> <span className="muted small">{Number(i.benchmark_percentage)} % of <Money v={i.eligible_revenue_basis} />{i.client_interest_share ? ` (client interest ${Number(i.client_interest_share)} %)` : ""}</span></> : <span className="muted">not calculated</span>],
-                ["IPRS paid, % of the revenue", <Pct v={i.observed_percentage} />],
-                ["Shortfall (expected − paid)", i.indicative_variance == null ? <span className="muted">—</span> : Number(i.indicative_variance) > 0.005
+                ["Expected from IPRS", i.reference_benchmark_amount != null ? <><Amount v={i.reference_benchmark_amount} /> <span className="muted small">{Number(i.benchmark_percentage)} % of <Money v={i.eligible_revenue_basis} />{i.client_share_pct && Number(i.client_share_pct) !== 100 ? " (the total revenue)" : i.client_interest_share ? ` (client interest ${Number(i.client_interest_share)} %)` : ""}</span></> : <span className="muted">not calculated</span>],
+                [i.client_share_pct && Number(i.client_share_pct) !== 100 ? "Received, % of the total revenue" : "Received, % of the revenue", <Pct v={i.observed_percentage} />],
+                [`Variance % (${Number(i.benchmark_percentage)} % − received %)`, i.indicative_variance == null || i.observed_percentage == null || i.benchmark_percentage == null ? <span className="muted">—</span>
+                  : <Pct v={Number(i.benchmark_percentage) - Number(i.observed_percentage)} />],
+                ["Variance (expected − received)", i.indicative_variance == null ? <span className="muted">—</span> : Number(i.indicative_variance) > 0.005
                   ? <span className="under-t"><Money v={i.indicative_variance} /> underpaid</span> : <span className="good-t">paid in full (<Money v={i.indicative_variance} />)</span>],
-                ["Client statement − IPRS paid", <Amount v={i.client_iprs_difference} />],
+                ...(i.client_iprs_difference != null ? [["Client statement − IPRS paid", <Amount v={i.client_iprs_difference} />] as [string, React.ReactNode]] : []),
                 ["Links", <MappingPill status={i.mapping_status} />]]} />
             </div>
           </div>

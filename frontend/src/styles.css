@@ -589,13 +589,14 @@ pre.draft-view { white-space: pre-wrap; font-family: var(--font); background: va
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18); }
 .wn-field .hint.good-t { color: var(--good-ink); }
 
-/* per-platform benchmark */
+/* per-platform IPRS % and client share */
 .plat-pick { display: flex; flex-direction: column; gap: 4px; }
 .plat-pick .check.all { padding-bottom: 6px; border-bottom: 1px solid var(--border-strong); }
 .plat-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 6px 0;
   border-bottom: 1px solid var(--border); min-height: 46px; }
 .plat-row .field.inline { display: inline-flex; align-items: center; gap: 6px; margin: 0; font-size: 14.5px; color: var(--ink-2); }
 .plat-row .input.sm { width: 92px; }
+.plat-row .plat-vals { display: inline-flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 
 /* wide tables: a scroll bar on top too, and hold-and-drag */
 .scrollx { min-width: 0; }
@@ -726,3 +727,18 @@ table.skv.blocks .fz2 { border-right: 2px solid var(--border-strong); }
 .tbl.master tfoot td.fz { background: var(--surface-2); border-right: 2px solid var(--border-strong); }
 .tbl.master tr.click:hover td.fz { background: var(--surface-2); }
 @media (max-width: 700px) { .tbl.master .fz { position: static; } }
+
+/* 1.6.1: reconciliation - the plain 'what is compared' line, the tiles heading, the run's details at the bottom */
+.compare-line { margin: 6px 0 0; padding: 8px 12px; border-left: 3px solid var(--indicator); background: var(--accent-wash); border-radius: 0 6px 6px 0; }
+.tiles-h { font-size: 15px; margin: 6px 0 8px; font-weight: 650; }
+.run-meta { margin: 4px 2px 0; }
+.run-meta p { margin: 0 0 4px; }
+
+/* home: one box per statement source - IPRS, then each platform with its reports */
+.st-boxes { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; }
+.st-box { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 14px 16px; text-align: left; cursor: pointer;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--ink); box-shadow: var(--shadow); font: inherit; }
+.st-box:hover { border-color: var(--accent); }
+.st-box-t { font-weight: 650; }
+.st-box-n { font-size: 28px; font-weight: 700; color: var(--accent-ink); line-height: 1.15; font-variant-numeric: tabular-nums; }
+.st-box-s { color: var(--ink-2); font-size: 14.5px; }

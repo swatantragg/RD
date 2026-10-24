@@ -8,8 +8,6 @@ import { ProfileMenu } from "./ProfileMenu";
 import { VersionButton, WhatsNew } from "./WhatsNew";
 import { Logo } from "./Logo";
 import Home from "./pages/Home";
-import Process from "./pages/Process";
-import PastReports from "./pages/PastReports";
 import Clients from "./pages/Clients";
 import Settings from "./pages/Settings";
 import Catalogue from "./pages/Catalogue";
@@ -26,7 +24,6 @@ const NAV = [
   { key: "master", label: "Master" },
   { key: "reconciliation", label: "Reconciliation" },
   { key: "enquiries", label: "Enquiries" },
-  { key: "reports", label: "Reports", also: ["process"] },
   { key: "settings", label: "Settings", also: ["clients"] },
 ];
 
@@ -41,8 +38,6 @@ function Shell() {
       case "master": return <Master tab={rest[0]} />;
       case "reconciliation": return <Reconciliation runId={rest[0] ? Number(rest[0]) : undefined} />;
       case "enquiries": return <Enquiries id={rest[0] ? Number(rest[0]) : undefined} />;
-      case "process": return <Process runId={rest[0] ? Number(rest[0]) : undefined} />;
-      case "reports": return <PastReports />;
       case "clients": return <Clients start={rest[0]} />;
       case "settings": return <Settings tab={rest[0]} />;
       default: return <Home />;

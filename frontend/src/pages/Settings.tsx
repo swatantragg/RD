@@ -245,10 +245,13 @@ function ClientPicker({ clients, value, onChange }: { clients: { id: number; cod
 }
 
 // ================================================================== reconciliation settings
-type PlatSetting = { platform_id: number; platform: string; revenue: number; iprs: number; platform_reports?: number; client?: number; own: boolean; setting_id: number | null;
-  benchmark_percentage: string | null; client_interest_pct: string | null; revenue_basis: string | null };
+type PlatSetting = { platform_id: number; platform: string; iprs: number; platform_reports: number; own: boolean; setting_id: number | null;
+  benchmark_percentage: string | null; client_share_pct: string | null; revenue_basis: string | null };
 type RS = { current: any[]; default: any | null; platforms: PlatSetting[]; history: any[]; iprs_currency: string | null; can_change: boolean };
+const pc = (v: string | null | undefined) => (v == null ? null : `${Number(v)} %`);
 
+/** The two percentages of a reconciliation: what IPRS is expected to pay (the IPRS %) of a song's total revenue, and
+ *  the client's share of that total that the platform pays (the platform report shows that share). */
 function ReconSettings() {
   const { clientId, client, toast } = useApp();
   const qc = useQueryClient();
@@ -257,29 +260,34 @@ function ReconSettings() {
   if (!clientId) return <Notice tone="warn">No client.</Notice>;
   const d = q.data;
   const def = d?.default;
+  const oldInterest = d?.history.some((h) => h.client_interest_pct) || def?.client_interest_pct;
   return (
     <>
       <Card><ClientSelect label="Client" /></Card>
       {!d ? <Loading /> : <>
       <Card title={`Reconciliation basis for ${client?.name}`}
             actions={d.can_change && <Button kind="primary" onClick={() => setEdit(true)}>Change</Button>}>
-        {!def ? <Notice tone="warn">No reference benchmark is set for this client yet. {d.can_change ? "Change starts at 4 %." : "The Super Admin sets it."}</Notice> : (
+        {!def ? <Notice tone="warn">No IPRS % is set for this client yet. {d.can_change ? "Change starts at 4 %." : "The Super Admin sets it."}</Notice> : (
           <dl className="facts">
-            <dt>Expected from IPRS (indicative reference)</dt><dd><b>{Number(def.benchmark_percentage)} %</b> of the platform revenue (client-wide; a platform can have its own value). A work is underpaid when IPRS paid less.</dd>
-            <dt>Client interest in the revenue</dt><dd>{def.client_interest_pct ? `${Number(def.client_interest_pct)} % of the revenue counts` : "Not set - the whole platform revenue counts (100 %)"}</dd>
+            <dt>IPRS % (expected from IPRS)</dt><dd><b>{Number(def.benchmark_percentage)} %</b> of each song's total revenue (client-wide; a platform can have its own value). A work is underpaid when IPRS paid less.</dd>
+            <dt>Client share of the revenue</dt><dd>{!def.client_share_pct ? "Not set - the revenue the platform reports counts as the total (100 %)"
+              : Number(def.client_share_pct) === 100 ? <><b>100 %</b> - the revenue the platform reports is the song's total revenue</>
+                : <><b>{Number(def.client_share_pct)} %</b> - the platform pays the client this share of a song's total revenue, so the total revenue = revenue ÷ {Number(def.client_share_pct)} %</>}
+              {def.client_interest_pct && <div className="muted small">The client interest of {Number(def.client_interest_pct)} % set before version 1.6.0 is not used any more; saving new values clears it.</div>}</dd>
             <dt>Revenue basis compared</dt><dd>{def.revenue_basis.toLowerCase()}</dd>
             <dt>IPRS statement currency</dt><dd>{d.iprs_currency ?? "not set"} <span className="muted small">(IPRS statements do not print a currency)</span></dd>
             <dt>Set by</dt><dd>{def.created_by_name ?? "set-up"} on {day(def.effective_from)}{def.note && <div className="muted small">{def.note}</div>}</dd>
           </dl>)}
-        <h3 className="sub-h">Benchmark per platform</h3>
+        <h3 className="sub-h">Per platform</h3>
         {d.platforms.length === 0 ? <p className="muted">No platform in this client's statements yet. Upload statements first; each platform found appears here.</p> : (
           <div className="tbl-wrap"><table className="tbl">
-            <thead><tr><th>Platform</th><th>Statements uploaded</th><th className="num">Benchmark</th><th>Comes from</th></tr></thead>
+            <thead><tr><th>Platform</th><th>Statements uploaded</th><th className="num">IPRS %</th><th className="num">Client share</th><th>Comes from</th></tr></thead>
             <tbody>{d.platforms.map((p) => (
               <tr key={p.platform_id}><td><b>{p.platform}</b></td>
-                <td className="small">{int(p.platform_reports ?? 0)} platform · {int(p.client ?? p.revenue)} client · {int(p.iprs)} IPRS</td>
-                <td className="num">{p.benchmark_percentage ? `${Number(p.benchmark_percentage)} %` : "—"}</td>
-                <td className="small">{p.own ? <Pill tone="info">Own value</Pill> : "Client-wide value"}</td></tr>))}</tbody>
+                <td className="small">{int(p.platform_reports ?? 0)} platform · {int(p.iprs)} IPRS</td>
+                <td className="num">{pc(p.benchmark_percentage) ?? "—"}</td>
+                <td className="num">{pc(p.client_share_pct) ?? <span className="muted small">not set (100 %)</span>}</td>
+                <td className="small">{p.own ? <Pill tone="info">Own values</Pill> : "Client-wide values"}</td></tr>))}</tbody>
           </table></div>
         )}
         {!d.can_change && <p className="hint">Only the Super Admin changes these values.</p>}
@@ -287,9 +295,10 @@ function ReconSettings() {
       {d.history.length > 0 && (
         <Card title="Earlier values">
           <div className="tbl-wrap short"><table className="tbl">
-            <thead><tr><th>Platform</th><th>Benchmark</th><th>Client interest</th><th>Basis</th><th>From</th><th>Replaced</th><th>Note</th></tr></thead>
+            <thead><tr><th>Platform</th><th>IPRS %</th><th>Client share</th>{oldInterest && <th>Client interest (before 1.6.0)</th>}<th>Basis</th><th>From</th><th>Replaced</th><th>Note</th></tr></thead>
             <tbody>{d.history.map((h) => <tr key={h.id}><td>{h.platform_name ?? "Every platform"}</td><td>{Number(h.benchmark_percentage)} %</td>
-              <td>{h.client_interest_pct ? `${Number(h.client_interest_pct)} %` : "not established"}</td><td>{h.revenue_basis.toLowerCase()}</td>
+              <td>{pc(h.client_share_pct) ?? <span className="muted">not set</span>}</td>
+              {oldInterest && <td>{h.client_interest_pct ? `${Number(h.client_interest_pct)} %` : "—"}</td>}<td>{h.revenue_basis.toLowerCase()}</td>
               <td className="small">{day(h.effective_from)} · {h.created_by_name ?? "set-up"}</td><td className="small">{day(h.replaced_at)} · {h.replaced_by_name}</td><td className="small">{h.note}</td></tr>)}</tbody>
           </table></div>
         </Card>
@@ -301,42 +310,59 @@ function ReconSettings() {
   );
 }
 
-/** The reference benchmark (4 % by default) applies to the ticked platforms; an unticked platform gets its own value. */
+/** Two client-wide values - the IPRS % and the client share - apply to the ticked platforms ('Select all' ticks every
+ *  one); an unticked platform gets an IPRS % and a client share of its own, starting from the client-wide values. */
 function ReconEdit({ d, cid, name, onClose, onSaved }: { d: RS; cid: number; name: string; onClose: () => void; onSaved: (d: RS) => void }) {
   const def = d.default;
   const [f, setF] = useState({ benchmark_percentage: def ? String(Number(def.benchmark_percentage)) : "4",
-    client_interest_pct: def?.client_interest_pct ? String(Number(def.client_interest_pct)) : "", revenue_basis: def?.revenue_basis ?? "GROSS",
+    client_share_pct: def?.client_share_pct ? String(Number(def.client_share_pct)) : "100", revenue_basis: def?.revenue_basis ?? "GROSS",
     iprs_currency: d.iprs_currency ?? "INR", note: "" });
   const [use, setUse] = useState<Record<number, boolean>>(() => Object.fromEntries(d.platforms.map((p) => [p.platform_id, !p.own])));
-  const [own, setOwn] = useState<Record<number, string>>(() => Object.fromEntries(d.platforms.map((p) => [p.platform_id, p.own && p.benchmark_percentage ? String(Number(p.benchmark_percentage)) : ""])));
+  const [own, setOwn] = useState<Record<number, { b: string; s: string }>>(() => Object.fromEntries(d.platforms.map((p) => [p.platform_id, {
+    b: p.own && p.benchmark_percentage ? String(Number(p.benchmark_percentage)) : "", s: p.own && p.client_share_pct ? String(Number(p.client_share_pct)) : "" }])));
   const all = d.platforms.length > 0 && d.platforms.every((p) => use[p.platform_id]);
   const bench = f.benchmark_percentage || "…";
+  const share = f.client_share_pct || "…";
+  const tick = (ids: number[], on: boolean) => {       // an unticked platform starts from the client-wide values
+    setUse((u) => ({ ...u, ...Object.fromEntries(ids.map((id) => [id, on])) }));
+    if (!on) setOwn((o) => ({ ...o, ...Object.fromEntries(ids.map((id) => [id, { b: o[id]?.b || f.benchmark_percentage, s: o[id]?.s || f.client_share_pct }])) }));
+  };
+  const setOne = (id: number, k: "b" | "s", v: string) => setOwn((o) => ({ ...o, [id]: { ...(o[id] ?? { b: "", s: "" }), [k]: numeric(v, 4) } }));
   return (
     <FormDialog title="Change the reconciliation basis" sub={name} submit="Save new values" wide onClose={onClose}
                 onSubmit={async () => onSaved(await api.post<RS>("/reconciliation/settings/platforms", { client_id: cid, ...f,
-                  platforms: d.platforms.map((p) => ({ platform_id: p.platform_id, use_default: !!use[p.platform_id], benchmark_percentage: use[p.platform_id] ? null : own[p.platform_id] })) }))}>
-      <label className="field">Indicative reference benchmark (% of eligible revenue)
-        <input className="input" inputMode="decimal" required pattern={NUMBER_PATTERN} title="A number, for example 4 or 4.5"
-               value={f.benchmark_percentage} onChange={(e) => setF({ ...f, benchmark_percentage: numeric(e.target.value, 4) })} /></label>
-      <fieldset className="box plat-pick"><legend>Apply {bench} % to these platforms</legend>
-        {d.platforms.length === 0 ? <p className="muted small">No platform in {name}'s statements yet. The value applies to every platform found later.</p> : <>
-          <p className="hint">Platforms found in {name}'s uploaded statements. Untick a platform to give it its own percentage.</p>
-          <label className="check all"><input type="checkbox" checked={all} onChange={(e) => setUse(Object.fromEntries(d.platforms.map((p) => [p.platform_id, e.target.checked])))} /> <b>Select all</b></label>
+                  platforms: d.platforms.map((p) => ({ platform_id: p.platform_id, use_default: !!use[p.platform_id],
+                    benchmark_percentage: use[p.platform_id] ? null : own[p.platform_id]?.b, client_share_pct: use[p.platform_id] ? null : own[p.platform_id]?.s })) }))}>
+      <div className="form-grid">
+        <label className="field">IPRS % (of a song's total revenue)
+          <input className="input" inputMode="decimal" required pattern={NUMBER_PATTERN} title="A number, for example 7 or 4.5"
+                 value={f.benchmark_percentage} onChange={(e) => setF({ ...f, benchmark_percentage: numeric(e.target.value, 4) })} />
+          <span className="hint">What IPRS is expected to pay, for example 7 % of what the song earned.</span></label>
+        <label className="field">Client share (% of a song's total revenue)
+          <input className="input" inputMode="decimal" required pattern={NUMBER_PATTERN} title="A number, for example 52 or 100"
+                 value={f.client_share_pct} onChange={(e) => setF({ ...f, client_share_pct: numeric(e.target.value, 4) })} />
+          <span className="hint">What the platform pays the client, for example 52 %: the platform report shows that share, so the total = revenue ÷ 52 %. 100 = the report shows the total.</span></label>
+      </div>
+      <fieldset className="box plat-pick"><legend>Apply {bench} % and {share} % to these platforms</legend>
+        {d.platforms.length === 0 ? <p className="muted small">No platform in {name}'s statements yet. The values apply to every platform found later.</p> : <>
+          <p className="hint">Platforms found in {name}'s uploaded statements. Untick a platform to give it an IPRS % and a client share of its own.</p>
+          <label className="check all"><input type="checkbox" checked={all} onChange={(e) => tick(d.platforms.map((p) => p.platform_id), e.target.checked)} /> <b>Select all</b></label>
           {d.platforms.map((p) => (
             <div key={p.platform_id} className="plat-row">
-              <label className="check"><input type="checkbox" checked={!!use[p.platform_id]} onChange={(e) => setUse({ ...use, [p.platform_id]: e.target.checked })} />
-                {" "}<b>{p.platform}</b> <span className="muted small">{int(p.platform_reports ?? 0)} platform · {int(p.client ?? p.revenue)} client · {int(p.iprs)} IPRS</span></label>
-              {use[p.platform_id] ? <span className="muted small">{bench} %</span> : (
-                <label className="field inline">Benchmark %
-                  <input className="input sm" inputMode="decimal" required pattern={NUMBER_PATTERN} title="A number, for example 5 or 5.5" value={own[p.platform_id] ?? ""} placeholder="e.g. 5"
-                         aria-label={`Benchmark for ${p.platform}`} onChange={(e) => setOwn({ ...own, [p.platform_id]: numeric(e.target.value, 4) })} /></label>)}
+              <label className="check"><input type="checkbox" checked={!!use[p.platform_id]} onChange={(e) => tick([p.platform_id], e.target.checked)} />
+                {" "}<b>{p.platform}</b> <span className="muted small">{int(p.platform_reports ?? 0)} platform · {int(p.iprs)} IPRS</span></label>
+              {use[p.platform_id] ? <span className="muted small">IPRS {bench} % · client share {share} %</span> : (
+                <span className="plat-vals">
+                  <label className="field inline">IPRS %
+                    <input className="input sm" inputMode="decimal" required pattern={NUMBER_PATTERN} title="A number, for example 7 or 4.5" value={own[p.platform_id]?.b ?? ""} placeholder="e.g. 7"
+                           aria-label={`IPRS % for ${p.platform}`} onChange={(e) => setOne(p.platform_id, "b", e.target.value)} /></label>
+                  <label className="field inline">Client share %
+                    <input className="input sm" inputMode="decimal" required pattern={NUMBER_PATTERN} title="A number, for example 52 or 100" value={own[p.platform_id]?.s ?? ""} placeholder="e.g. 52"
+                           aria-label={`Client share for ${p.platform}`} onChange={(e) => setOne(p.platform_id, "s", e.target.value)} /></label>
+                </span>)}
             </div>))}
         </>}
       </fieldset>
-      <label className="field">Client interest in the reported revenue (%)<input className="input" inputMode="decimal" pattern={NUMBER_PATTERN} title="A number, for example 100 or 50"
-                                                                               value={f.client_interest_pct} placeholder="empty = the whole revenue (100 %)"
-                                                                               onChange={(e) => setF({ ...f, client_interest_pct: numeric(e.target.value, 4) })} />
-        <span className="hint">The client's share of the revenue in the report (for example 100 % if the client owns the recordings outright, 50 % if it shares them).</span></label>
       <div className="form-grid">
         <label className="field">Revenue basis compared<Select value={f.revenue_basis} onChange={(v) => setF({ ...f, revenue_basis: v })} options={[{ value: "GROSS", label: "Gross" }, { value: "NET", label: "Net" }]} /></label>
         <label className="field">IPRS statement currency<input className="input" value={f.iprs_currency} onChange={(e) => setF({ ...f, iprs_currency: e.target.value })} /></label>
@@ -447,11 +473,11 @@ function Help() {
       <Guide />
       <Card title="Words used in this application">
         <dl className="facts">
-          <dt>Platform report</dt><dd>The platform's report (for example MRM's Spotify report): revenue and usage (plays) per ISRC and month. Revenue and usage may come in two files; they are combined by ISRC and song name.</dd>
-          <dt>Client statement</dt><dd>The client's statement per platform, per work (in the IPRS layout): what it shows for each work and period.</dd>
-          <dt>IPRS statement</dt><dd>A statement received from IPRS: what IPRS paid for each work, platform and period.</dd>
+          <dt>Platform report</dt><dd>The platform's report (for example MRM's Spotify report): revenue and usage (plays) per ISRC and month. Revenue and usage may come in two files; they are combined by ISRC and song name. The revenue is the client's share of what the song earned.</dd>
+          <dt>IPRS statement</dt><dd>What IPRS paid for each work, platform and period - received from IPRS, or forwarded by the client in the same layout.</dd>
+          <dt>Client share, total revenue</dt><dd>The share of a song's revenue the platform pays the client (for example Spotify 52 %). The song's total revenue = the revenue reported ÷ the client share: Rs. 52 at 52 % is Rs. 100.</dd>
           <dt>Work and ISRC</dt><dd>A work is the composition (IPRS work number); an ISRC identifies one recording of it. One work can have many ISRCs.</dd>
-          <dt>Expected (indicative reference)</dt><dd>The platform revenue × the approved benchmark (4 % for SVF), times the client interest when it is set. A reference for review, not an amount payable.</dd>
+          <dt>IPRS %, expected royalty</dt><dd>The IPRS % (for example 7 %) of the song's total revenue: Rs. 7 of Rs. 100. A reference for review, not an amount payable. Received % = what IPRS paid ÷ the total revenue.</dd>
           <dt>Underpaid, shortfall</dt><dd>IPRS paid less than expected; the shortfall is expected minus paid. It says where to ask IPRS a question; it does not establish that anything is owed.</dd>
           <dt>No corresponding IPRS entry</dt><dd>The uploaded IPRS statements contain no line for the work. It does not mean the royalty is zero.</dd>
           <dt>Song list</dt><dd>The client's own list of songs with their ISRCs and IPRS work numbers.</dd>

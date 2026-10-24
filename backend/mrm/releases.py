@@ -4,6 +4,60 @@ from __future__ import annotations
 from . import __version__
 
 RELEASES: list[dict] = [
+    dict(version="1.6.1", date="24 Oct 2026",
+         summary="The variance % is the difference in percentage points (7 % expected, 1 % received = 6 %), the "
+                 "reconciliation says in plain words which months it compares, and its page shows one dashboard.",
+         points=["Variance % = IPRS % - received %: the difference in percentage points. IPRS should pay 7 % of the "
+                 "total revenue and paid 1 %, so the variance % is 6 % (before, it was the variance amount as a % of "
+                 "the expected value). The Variance amount comes right after it: ... Received % · Variance % · Variance "
+                 "amount - on the reconciliation page, in its Excel report and in a query's attachment.",
+                 "Reconciliation: the Platform list shows only platforms with both their revenue report and an IPRS "
+                 "statement uploaded.",
+                 "Reconciliation: 'Which months to compare?' - each choice shows its months, the IPRS statement and how "
+                 "much of it the platform's revenue and plays cover; a period without platform revenue is named but "
+                 "not offered; the line under it says, for example, 'Compares Spotify revenue for Oct 2025 – Mar 2026 "
+                 "with what IPRS paid for the same months'. The run page starts with the same line.",
+                 "Reconciliation table: the platform section has no Date column (Amount · Period with its Usage · "
+                 "Distribution No) and the IPRS royalty section no Usage column (Amount · Date · Period · Distribution "
+                 "No) - as in the Excel report and the query attachment, for works, unmatched recordings and works not "
+                 "in the catalogue.",
+                 "Run page: one dashboard - the figures and, under 'To review', the tiles that filter the list; no "
+                 "number is shown twice. The run's reference, who ran it and the calculation basis are at the bottom, "
+                 "with the statements used.",
+                 "The Reports section is gone: the reconciliation (with its unmatched songs and Excel report) and the "
+                 "query attachment are the reports.",
+                 "Songs are listed by song name, A → Z, unless another order is chosen: the master sheet, Works by "
+                 "platform, the reconciliation list, and every download - the master statement and master view, the "
+                 "reconciliation's Excel report (in the order chosen on screen) and a query's attachments.",
+                 "Home: the Statements section shows one box per source - IPRS with the number of statements received "
+                 "from IPRS, then each platform that sent reports (e.g. Spotify, 2 statements); the status counts and the "
+                 "list of recent files are gone. A box opens its Statements tab."]),
+    dict(version="1.6.0", date="23 Oct 2026",
+         summary="The reconciliation works out each song's total revenue from the client's share before checking what "
+                 "IPRS paid, and Statements has two tabs: Platform reports and IPRS statements.",
+         points=["Reconciliation: the platform report shows the client's share of a song's revenue. The song's total "
+                 "revenue (100 %) = revenue ÷ client share, and IPRS is expected to pay the IPRS % of that total. For "
+                 "example a song earns Rs. 100 on Spotify and the client receives 52 %, Rs. 52: total revenue = 52 ÷ "
+                 "52 % = Rs. 100, expected at 7 % = Rs. 7; IPRS paid Rs. 3, so 3 % was received and the variance is "
+                 "Rs. 4 (57.14 % of the expected value).",
+                 "Settings → Reconciliation: two client-wide values, the IPRS % and the client share %, and for each "
+                 "platform an IPRS % and a client share of its own - or the client-wide values ('Select all' ticks every "
+                 "platform). A client share that is not set counts as 100 % (the revenue reported is the total).",
+                 "Statements has two tabs: Platform reports and IPRS statements. The client's statements were IPRS "
+                 "statements the client forwards (the same layout), so they are under IPRS statements now, with the "
+                 "others; the batches of each tab are numbered again in upload order. A reconciliation needs the "
+                 "platform's revenue report: a platform with IPRS statements only shows 'No platform report'.",
+                 "Reconciliation, 'Check: expected vs paid': total revenue (100 %), the client share (the revenue the "
+                 "platform reported), the expected value, received from IPRS, received % of the total revenue, the "
+                 "variance amount and the variance %.",
+                 "Excel report and query attachment: no Date column in the platform section and no Usage in the IPRS "
+                 "royalty section; the check section shows Revenue (the client share amount), the expected value, "
+                 "Received from IPRS, Received % of the total revenue, Variance amount and Variance % - the Result column "
+                 "is gone.",
+                 "Query to IPRS: two downloads - the attachment, and the attachment with usage: the same report with each "
+                 "song's usage and its revenue per usage (the song's total revenue ÷ its usage: Rs. 100 for 100 plays = "
+                 "Rs. 1 per play) at the end. When the usage report covers only some months, the revenue of those months "
+                 "is used."]),
     dict(version="1.5.4", date="22 Oct 2026",
          summary="The check section shows the revenue the expected royalty is taken of, and Internal No, song name "
                  "and ISRC stay in view in the wide tables.",

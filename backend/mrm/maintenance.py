@@ -67,6 +67,7 @@ def clear_statements(code: str, reason: str, dry_run: bool = False, echo=print, 
             ("DELETE FROM reconciliation_runs WHERE client_id = %s", (cid,)),
             ("UPDATE statements SET related_statement_id = NULL, superseded_by = NULL WHERE client_id = %s", (cid,)),
             ("DELETE FROM statements WHERE client_id = %s", (cid,)),
+            ("DELETE FROM statement_batches WHERE client_id = %s", (cid,)),       # the next upload is batch 1 again
             ("DELETE FROM rd_job WHERE build_id = ANY(%s)", (builds,)),
             ("DELETE FROM rd_finding WHERE build_id = ANY(%s)", (builds,)),
             ("DELETE FROM rd_issue WHERE build_id = ANY(%s)", (builds,)),

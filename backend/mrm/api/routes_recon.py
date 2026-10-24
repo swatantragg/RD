@@ -279,9 +279,9 @@ async def master_sheet(client_id: int, platform_id: int | None = None, period_fr
 @router.get("/master/export-statement")
 async def master_statement(client_id: int, platform_id: int | None = None, period_from: str | None = None,
                            period_to: str | None = None, statement_id: int | None = None, side: str | None = None,
-                           a: dict = Depends(actor)):
+                           sort: str | None = None, a: dict = Depends(actor)):
     name, data = await run_in_threadpool(master.export_skv, a, client_id, _mf(
-        platform_id, period_from, period_to, statement_id, None, None, None, None, None, side))
+        platform_id, period_from, period_to, statement_id, None, None, None, None, sort, side))
     return _attachment(name, data)
 
 
@@ -346,8 +346,9 @@ def recon_items(rid: int, kind: str | None = None, calc: str | None = None, mapp
 @router.get("/reconciliation/runs/{rid}/report")
 def recon_report(rid: int, kind: str | None = None, calc: str | None = None, mapping: str | None = None,
                  review: str | None = None, exception: str | None = None, q: str | None = None,
-                 open: bool = False, variance: str | None = None, a: dict = Depends(actor)):  # noqa: A002
-    return _attachment(*recon.report(a, rid, _rf(kind, calc, mapping, review, exception, q, None, open, variance)))
+                 open: bool = False, variance: str | None = None, sort: str | None = None,
+                 a: dict = Depends(actor)):  # noqa: A002
+    return _attachment(*recon.report(a, rid, _rf(kind, calc, mapping, review, exception, q, sort, open, variance)))
 
 
 @router.get("/reconciliation/items/{iid}")
@@ -421,8 +422,8 @@ def update_follow_up(aid: int, body: dict = Body(...), a: dict = Depends(actor))
 
 
 @router.get("/enquiries/{eid}/attachment")
-def enquiry_attachment(eid: int, a: dict = Depends(actor)):
-    return _attachment(*enquiries.attachment(a, eid))
+def enquiry_attachment(eid: int, usage: bool = False, a: dict = Depends(actor)):
+    return _attachment(*enquiries.attachment(a, eid, usage))
 
 
 @router.get("/enquiries/{eid}/annex")

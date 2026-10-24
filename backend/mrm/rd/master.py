@@ -1,5 +1,6 @@
 """The master view: every catalogue work with its linked ISRCs and what is behind it, platform by platform: the
-platform revenue and usage (plays) from the platform reports, what the client's statements show and what IPRS paid.
+platform revenue and usage (plays) from the platform reports and what IPRS paid (the client's statements of versions
+before 1.6.0 are IPRS statements now; the 'client' kind stays empty).
 
 Totals are always summed from the normalised source records (client_revenue_records, platform_usage_records,
 iprs_royalty_records) at the moment they are read for the period chosen; nothing is stored separately, so nothing can
@@ -8,7 +9,7 @@ together. Facebook, Instagram, Meta (IPRS's single licence) and YouTube stay sep
 
 The SKV export rebuilds the client's master workbook (the SVF-RD-SKV8 layout) from the same records with the
 proven report engine: the catalogue is the song list, every imported statement in the selection is a distribution
-(the client's statements with the platform revenue reports, or the statements received from IPRS).
+(the platform revenue reports, or the IPRS statements).
 """
 from __future__ import annotations
 
@@ -27,8 +28,8 @@ from .store import load_data
 ZERO = Decimal("0")
 SORTS = {"revenue": "revenue_total DESC NULLS LAST", "royalty": "royalty_total DESC NULLS LAST",
          "usage": "usage_total DESC NULLS LAST", "client": "client_total DESC NULLS LAST",
-         "revenue_asc": "revenue_total ASC NULLS LAST", "title": "lower(w.work_title)",
-         "title_desc": "lower(w.work_title) DESC", "work": "w.internal_work_number NULLS LAST",
+         "revenue_asc": "revenue_total ASC NULLS LAST", "title": "lower(w.work_title) NULLS LAST",
+         "title_desc": "lower(w.work_title) DESC NULLS LAST", "work": "w.internal_work_number NULLS LAST",
          "updated": "w.updated_at DESC"}
 
 
@@ -131,7 +132,7 @@ def view(actor: dict, client_id: int, f: dict, offset: int = 0, limit: int = 100
         where = _where(f, p)
         base = ALL_CTE
         frm = "FROM works w " + " ".join(f"LEFT JOIN {k}_w ON {k}_w.work_id = w.id" for k in KINDS.values())
-        order = SORTS.get(f.get("sort") or "revenue", SORTS["revenue"])
+        order = SORTS.get(f.get("sort") or "title", SORTS["title"])           # default: song name, A → Z
         rows = db.all(conn, base + f"SELECT w.id, w.internal_work_number, w.work_title, w.catalogue_status, "
                                    f"w.updated_at, rev_w.by_platform AS revenue, rev_w.total AS revenue_total, "
                                    f"use_w.by_platform AS usage, use_w.total AS usage_total, cli_w.by_platform AS "
@@ -321,13 +322,29 @@ def export_view(actor: dict, client_id: int, f: dict) -> tuple[str, bytes]:
         f"statement #{ff['s']}" if ff["s"] else None, f"search '{f['q']}'" if f.get("q") else None,
         f"catalogue status {f['status']}" if f.get("status") else None,
         f"mapping {f['mapping']}" if f.get("mapping") else None) if x),
-               "Platform revenue and usage (the platform reports), the client's statements and what IPRS paid are never "
-               "added together. They reach a work only through its ISRC links or its work number; unmatched lines are "
-               "listed separately in the application. An empty cell means no record, not zero."]
+               "Platform revenue and usage (the platform reports) and what IPRS paid are never added together. They "
+               "reach a work only through its ISRC links or its work number; unmatched lines are listed separately in "
+               "the application. An empty cell means no record, not zero."]
     name = f"{code}_Master_View_{xlsx.safe_name(plat) + '_' if plat else ''}{_span(ff)}.xlsx"
     return name, xlsx.book([dict(title="Master view", heading=heading, columns=cols, rows=out)])
 
 
+
+
+def _export_order(res, sort: str | None, one_platform: bool) -> None:
+    """The master statement's rows in the order shown on screen (master sheet Sort); default Song name, A → Z."""
+    sort = sort if sort in SHEET_SORTS else "title_asc"
+    if sort.startswith("platform") and not one_platform:
+        sort = "title_asc"
+    if sort == "amount_desc":                       # the engine's own order
+        return
+    if sort in ("title_asc", "title_desc"):
+        res.rows.sort(key=lambda r: (title_key(r.title), r.key), reverse=sort == "title_desc")
+    elif sort == "amount_asc":
+        res.rows.sort(key=lambda r: (r.royalty, title_key(r.title), r.key))
+    else:
+        res.rows.sort(key=lambda r: (sum(r.platform.values(), ZERO), title_key(r.title), r.key),
+                      reverse=sort == "platform_desc")
 
 
 def export_skv(actor: dict, client_id: int, f: dict) -> tuple[str, bytes]:
@@ -336,6 +353,7 @@ def export_skv(actor: dict, client_id: int, f: dict) -> tuple[str, bytes]:
     ff = _filters(f)
     side = "IPRS" if f.get("side") == "IPRS" else "CLIENT"
     c, res, inp, inputs, sts = _build(actor, client_id, ff, export=True, side=side)
+    _export_order(res, f.get("sort"), bool(ff["pl"]))
     data, _meta = excel.master(res, client_code=c["code"], generation=inp.generation, state="EXPORT",
                                build_ref=f"master export by {actor.get('name') or actor['email']}",
                                ruleset=rules.RULESET_V1, software=SOFTWARE, inputs=inputs, left_out=[], decisions=[],
@@ -365,7 +383,7 @@ def _build(actor: dict, client_id: int, ff: dict, export: bool = False, side: st
                            "s.usage_period_start <= %(b)s AND s.usage_period_end >= %(a)s)) ORDER BY s.uploaded_at, s.id",
                      dict(c=client_id, sides=["IPRS"] if side == "IPRS" else ["CLIENT", "PLATFORM"], **ff))
         if not sts:
-            raise MasterError(f"No imported {'client statement or platform revenue report' if side == 'CLIENT' else 'IPRS statement'} matches this selection"
+            raise MasterError(f"No imported {'platform revenue report' if side == 'CLIENT' else 'IPRS statement'} matches this selection"
                               + (" (switch the side to see the other statements)." if not ff["s"] else "."))
         inp = engine.RunInput(client_code=c["code"], client_name=c["name"], ruleset=rules.RULESET_V1)
         inputs = []
@@ -494,7 +512,7 @@ SHEET_SORTS = ("amount_desc", "amount_asc", "title_asc", "title_desc", "platform
 
 
 def _sheet_order(sh: dict, idx: list[int], sort: str) -> list[int]:
-    """The rows in the order chosen. The engine's order is already Total Amount, highest first."""
+    """The rows in the order chosen (default Song name, A → Z). The engine's order is Total Amount, highest first."""
     rows, n = sh["rows"], sh["plat_n"]
     if sort in ("title_asc", "title_desc"):
         return sorted(idx, key=lambda i: title_key(rows[i][TITLE_COL]), reverse=sort == "title_desc")
@@ -527,9 +545,9 @@ def sheet(actor: dict, client_id: int, f: dict, offset: int = 0, limit: int = 10
                 _SHEETS.popitem(last=False)
     q = (f.get("q") or "").strip().lower()
     idx = [i for i, k in enumerate(sh["keys"]) if q in k] if q else list(range(len(sh["rows"])))
-    sort = f.get("sort") if f.get("sort") in SHEET_SORTS else "amount_desc"
+    sort = f.get("sort") if f.get("sort") in SHEET_SORTS else "title_asc"
     if sort.startswith("platform") and not (ff["pl"] and sh["plat_n"]):
-        sort = "amount_desc"
+        sort = "title_asc"
     idx = _sheet_order(sh, idx, sort)
     n = sh["plat_n"]
     drop = 0 if ff["pl"] else n                    # every platform: the platform totals are left out of the sheet

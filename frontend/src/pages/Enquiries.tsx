@@ -152,7 +152,7 @@ type Detail = { enquiry: Enq; items: any[]; events: { id: number; event_type: st
     message_reference: string | null; sender_reference: string | null; recipient_reference: string | null; communication_date: string; recorded_by_name: string;
     statement_filename: string | null; related_statement_id: number | null }[];
   allowed: { action: string; label: string }[]; run: { id: number; reference: string } | null; assignees: { id: number; name: string; role: string }[];
-  can_assign: boolean; editable: boolean; text_current: boolean; comm_types: string[]; attachment: string | null };
+  can_assign: boolean; editable: boolean; text_current: boolean; comm_types: string[]; attachment: string | null; attachment_usage: string | null };
 
 const PRIMARY = ["submit", "approve", "record_sent", "record_response", "resolve", "close"];
 
@@ -228,14 +228,22 @@ function Draft({ d, onSaved }: { d: Detail; onSaved: (x: Detail) => void }) {
   const copy = async () => { try { await navigator.clipboard.writeText(`${d.enquiry.subject}\n\n${d.enquiry.draft_body}`); toast("Copied."); } catch { toast("Copying is not available here; select the text instead.", true); } };
   return (
     <Card title="Enquiry text" actions={<Button kind="ghost" className="sm" onClick={copy}>Copy text</Button>}>
-      {d.attachment && (
+      {d.attachment && (<>
         <div className="attach">
           <span className="attach-ico" aria-hidden>📎</span>
           <div className="grow"><b className="wrap-any">{d.attachment}</b>
-            <div className="muted small">Attachment · {int(d.items.filter((i) => i.item_status !== "REMOVED").length)} songs: Internal No, song, ISRC · {d.enquiry.platform} amount, date, period and usage, distribution no. · IPRS royalty · expected vs paid</div></div>
+            <div className="muted small">Attachment · {int(songs)} songs: Internal No, song, ISRC · {d.enquiry.platform} amount, period and usage, distribution no. · IPRS royalty: amount, date, period, distribution no. · check: revenue, expected, received, % of the total revenue, variance</div></div>
           <DownloadButton kind="primary" path={`/enquiries/${d.enquiry.id}/attachment`} onError={(m) => toast(m, true)}>Download attachment</DownloadButton>
         </div>
-      )}
+        {d.attachment_usage && (
+          <div className="attach">
+            <span className="attach-ico" aria-hidden>📎</span>
+            <div className="grow"><b className="wrap-any">{d.attachment_usage}</b>
+              <div className="muted small">The same attachment with two more columns at the end: each song's usage and its revenue per usage (the song's total revenue ÷ its usage)</div></div>
+            <DownloadButton kind="secondary" path={`/enquiries/${d.enquiry.id}/attachment?usage=true`} onError={(m) => toast(m, true)}>Download with usage</DownloadButton>
+          </div>
+        )}
+      </>)}
       {d.editable && !d.text_current && (
         <Notice tone="warn">This text is not the letter for the {int(songs)} songs now in the enquiry: it lists the songs one by one (drafts from before version 1.5.2)
           or was edited. The songs are in the attachment, so the letter only gives their number and what is asked.

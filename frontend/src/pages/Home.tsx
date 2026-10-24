@@ -2,14 +2,13 @@ import { useQuery } from "@tanstack/react-query";
 import { api, qs } from "../api";
 import { int } from "../format";
 import { useApp } from "../session";
-import { NeedClient, STATEMENT_TONE, period } from "../parts";
-import { Button, Card, Loading, Pill, day } from "../ui";
+import { NeedClient, period } from "../parts";
+import { Button, Card, Loading, day } from "../ui";
 
 type Overview = {
   catalogue: { works: number; works_to_check: number; links: number; pending: number; conflicts: number };
   statements: Record<string, number>;
-  recent_statements: { id: number; original_filename: string; record_type: string; import_status: string; uploaded_at: string;
-    usage_period_start: string | null; usage_period_end: string | null; platform_name: string | null }[];
+  statement_boxes: { iprs: number; platforms: { name: string; n: number }[] };
   runs: { id: number; run_reference: string; usage_period_start: string; usage_period_end: string; platform_name: string; started_at: string;
     summary: { compared: number; missing_iprs: number; unmatched_recordings: number; underpaid?: number } }[];
   previews_waiting: number; queues: { key: string; label: string; count: number }[];
@@ -23,18 +22,30 @@ export function Guide() {
       <ol className="guide">
         <li><b>Catalogue.</b> Import the client's song list. Each IPRS work number becomes a work; each ISRC is linked to it. A preview shows
           new works, new ISRCs, conflicts and invalid rows before anything changes.</li>
-        <li><b>Statements</b>, one tab each, in any order: <b>platform reports</b> (revenue and usage per ISRC and month - two files are
-          combined by ISRC and song name), the <b>client's statements</b> (per work, all platforms) and the <b>IPRS statements</b>. Each file
-          is checked and stored once; nothing is counted twice.</li>
-        <li><b>Master.</b> See every work with its platform revenue and plays, the client's statements and what IPRS paid, for any period,
-          and export the master statement.</li>
-        <li><b>Reconciliation.</b> For a platform and period: 4 % of each work's platform revenue (expected) against what IPRS paid, with
-          the client's statement beside it. Underpaid works are flagged with the % paid and the shortfall; missing entries, unknown ISRCs
-          and conflicts too - nothing is assumed.</li>
-        <li><b>Enquiries.</b> Raise a query to IPRS from the underpaid works (why was this song paid 1.2 % instead of 4 %?), have it
+        <li><b>Statements</b>, two tabs, in any order: <b>platform reports</b> (revenue and usage per ISRC and month - two files are
+          combined by ISRC and song name) and the <b>IPRS statements</b> (per work, all platforms - from IPRS or forwarded by the client).
+          Each file is checked and stored once; nothing is counted twice.</li>
+        <li><b>Master.</b> See every work with its platform revenue and plays and what IPRS paid, for any period, and export the master
+          statement.</li>
+        <li><b>Reconciliation.</b> For a platform and period: the platform revenue is the client's share of each song's revenue (for
+          example 52 % on Spotify), so the song's total revenue = revenue ÷ 52 %; IPRS is expected to pay the IPRS % of that total (for
+          example 7 %). Underpaid works are flagged with the % received and the variance; missing entries, unknown ISRCs and conflicts
+          too - nothing is assumed.</li>
+        <li><b>Enquiries.</b> Raise a query to IPRS from the underpaid works (why was this song paid 1.2 % instead of 7 %?), have it
           approved, send it yourself, then record responses and follow-ups until the issue is resolved and closed.</li>
       </ol>
     </Card>
+  );
+}
+
+/** One source of statements on the dashboard: IPRS, or one platform (e.g. Spotify), with how many it sent. */
+function StatementBox({ name, n, onClick }: { name: string; n: number; onClick: () => void }) {
+  return (
+    <button type="button" className="st-box" onClick={onClick}>
+      <span className="st-box-t">{name}</span>
+      <span className="st-box-n">{int(n)}</span>
+      <span className="st-box-s">statement{n === 1 ? "" : "s"}</span>
+    </button>
   );
 }
 
@@ -53,7 +64,7 @@ function Dashboard({ cid, name }: { cid: number; name: string }) {
   const st = d.statements;
   const imported = st.IMPORTED ?? 0;
   const next = !d.catalogue.works ? { text: "Start by importing the client's catalogue (song list).", go: "catalogue/import", label: "Import catalogue" }
-    : !imported ? { text: "Upload the platform reports, the client's statements and the IPRS statements (one tab each).", go: "statements", label: "Upload statements" }
+    : !imported ? { text: "Upload the platform reports and the IPRS statements (one tab each).", go: "statements", label: "Upload statements" }
       : (st.NEEDS_REVIEW ?? 0) > 0 ? { text: `${st.NEEDS_REVIEW} statement${st.NEEDS_REVIEW === 1 ? " needs" : "s need"} an answer before ${st.NEEDS_REVIEW === 1 ? "it counts" : "they count"}.`, go: "statements", label: "Answer now" }
         : !d.runs.length ? { text: "Everything is in place for a first reconciliation.", go: "reconciliation", label: "Run a reconciliation" }
           : d.overdue ? { text: `${d.overdue} follow-up${d.overdue === 1 ? " is" : "s are"} overdue.`, go: "enquiries", label: "Open enquiries" }
@@ -107,15 +118,11 @@ function Dashboard({ cid, name }: { cid: number; name: string }) {
         </Card>
       </div>
       <Card title="Statements" actions={<Button kind="ghost" onClick={() => go("statements/platform")}>Open</Button>}>
-        <dl className="facts">
-          <dt>Imported</dt><dd>{int(imported)}</dd>
-          {Object.entries(st).filter(([k]) => k !== "IMPORTED").map(([k, v]) => <span key={k} style={{ display: "contents" }}><dt>{k.replace("_", " ").toLowerCase()}</dt><dd>{int(v)}</dd></span>)}
-        </dl>
-        <ul className="list">{d.recent_statements.map((s) => (
-          <li key={s.id} className="click" onClick={() => go(`statements/${s.id}`)}>
-            <div><div className="li-t small">{s.original_filename}</div><div className="muted small">{s.platform_name ?? (s.record_type === "WORK_ROYALTY" ? "per work" : "")} · {period(s.usage_period_start, s.usage_period_end)} · {day(s.uploaded_at)}</div></div>
-            <Pill tone={STATEMENT_TONE[s.import_status] ?? "neutral"}>{s.import_status.replace("_", " ").toLowerCase()}</Pill>
-          </li>))}</ul>
+        {!d.statement_boxes.iprs && !d.statement_boxes.platforms.length ? <p className="muted">No statements yet.</p> : (
+          <div className="st-boxes">
+            {d.statement_boxes.iprs > 0 && <StatementBox name="IPRS" n={d.statement_boxes.iprs} onClick={() => go("statements/iprs")} />}
+            {d.statement_boxes.platforms.map((x) => <StatementBox key={x.name} name={x.name} n={x.n} onClick={() => go("statements/platform")} />)}
+          </div>)}
       </Card>
     </div>
   );

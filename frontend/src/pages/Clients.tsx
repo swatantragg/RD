@@ -18,7 +18,7 @@ export default function Clients({ start }: { start?: string }) {
   const list = q.data ?? [];
   const close = (created?: boolean) => {
     setEditing(null);
-    if (created && start === "new") go("process");
+    if (created && start === "new") go("catalogue");
     else if (start === "new") go("clients");
   };
   return (

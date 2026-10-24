@@ -2085,3 +2085,106 @@ by platform (now Internal No, Song, ISRCs as separate columns). The thick divide
 (percentages 4 places, amounts 2, statement number 0) and `NUMBER_PATTERN` refuses a dangling '4.' on submit. The
 server parses with `recon.plain_number` (`\d+(\.\d+)?` only; thousands commas only for amounts), so '1e2', 'NaN',
 'Infinity', '-4' and '1,5' as a percentage are refused instead of being read by `Decimal`.
+
+## 35. Version 1.6.0: client share and total revenue, two statement tabs
+
+**The calculation** (`recon.compute`). The platform report (MRM's Spotify report) shows the client's share of a song's
+revenue: the platform pays the client a share of what the song earned (Spotify 52 %). Per work:
+
+```
+total revenue (eligible_revenue_basis)   = platform revenue (sound_recording_revenue) / client share % x 100
+expected (reference_benchmark_amount)    = total revenue x IPRS % (benchmark_percentage)
+received % (observed_percentage)         = IPRS paid / total revenue x 100
+variance (indicative_variance)           = expected - IPRS paid          > 0.005 -> UNDERPAID
+variance %  (recon.variance_pct)         = variance / expected x 100
+```
+
+Example: Rs. 52 reported at 52 % → total Rs. 100 → expected at 7 % Rs. 7; IPRS paid Rs. 3 → 3 % received, variance
+Rs. 4 (57.14 %). Worked check (live copy, Spotify Oct 2025 – Mar 2026, 7 % / 52 %): Aaj Amaye revenue ₹9,633.50 → total
+₹18,525.97, expected ₹1,296.82, paid ₹119.23 (0.64 %), variance ₹1,177.59 (90.81 %). A client share that is not set
+counts as 100 % (`recon.share_of`; the run notes say so). The client interest of earlier versions (`client_interest_pct`,
+multiplying the revenue) is no longer set or used; runs before 1.6.0 keep it and show it as before. The usage lines
+of `compute` are always stored as `PLATFORM_USAGE` (plays) - a revenue line that stands for its plays is no longer
+also stored as revenue.
+
+**Settings** (migration `0013_iprs_tab_client_share.sql`: `client_share_pct` on `reconciliation_settings`,
+`reconciliation_runs` and `reconciliation_items`). `POST /reconciliation/settings/platforms` takes the client-wide
+`benchmark_percentage` (IPRS %) and `client_share_pct` (both required) and per platform `use_default` or its own pair;
+a row in force is replaced only when the IPRS %, the share or the basis changes, or it still carries a client interest.
+Settings → Reconciliation: two client-wide fields, 'Select all' (every platform follows them) and, per unticked platform,
+an IPRS % and a client share (starting from the client-wide values). A run records the share it used (100 when not
+set) on the run and on each item; `summary.share_set` says whether it was set.
+
+**Two statement tabs.** `library.SOURCES = ("PLATFORM", "IPRS")`. The client's statements were IPRS statements the client
+forwards (the same layout), so migration 0013 makes every `CLIENT` statement an `IPRS` statement, except a client copy
+of a file that is also under IPRS (`statements_file_source_key`): it stays `CLIENT`, `EXCLUDED`, without a batch. A
+client copy of a distribution already received from IPRS (same `identity_key`) becomes `DUPLICATE` (same fingerprint)
+or `NEEDS_REVIEW` (correction / additional / leave out). Batches: empty ones (left by Delete all statements) are
+deleted, the client tab's batches join the IPRS tab, and every tab is numbered again in upload order (live: IPRS
+Batch 1 = the 45 S-files, Batch 2 = Spotify Oct 2025 – Mar 2026; Platform Batch 1). `maintenance.clear_statements`
+now deletes the batches too. `upload`/`batches` read `CLIENT` as `IPRS` (older screens); `#/statements/client` opens the
+IPRS tab. A run needs the platform's revenue in its months (`start_run` refuses otherwise; the client-vs-IPRS mode of
+1.3.0–1.5.4 is gone); `options()` reports `NO_REVENUE` for platforms with IPRS statements only. Master sheet: the first
+side is the platform revenue reports only.
+
+**Run page, check section** (new runs): Total revenue (100 %) · Client share (N %) · Expected value (IPRS %) · Received
+from IPRS · Received % of total revenue · Variance amount · Variance %. Runs before 1.6.0 keep their columns (and the
+client-statement band and Client − IPRS column when they have one).
+
+**Song report** (`recon.block_sheet`: Excel report sheet 1, enquiry attachment). Platform blocks: Amount · Period (Period,
+Usage) · Distribution No (no Date). IPRS blocks: Amount · Date · Period · Distribution No (no Usage). CHECK: Revenue (the
+client share amount as reported) · Expected value (`N % of total revenue = revenue ÷ S %`) · Received from IPRS · Received
+% of total revenue · Variance amount · Variance % (TOTAL row: Σ ratios); no Result column. `check_note` writes the
+formula under the table. `block_sheet(…, share=, usage=)`.
+
+**Query attachment with usage**: `GET /enquiries/{id}/attachment?usage=true` (`attachment_name(…, usage=True)` =
+`…_Songs_with_usage.xlsx`; `detail` returns `attachment_usage`) adds a USAGE section at the end: Usage (plays) and
+Revenue per usage = the song's total revenue ÷ its plays, over the months the usage reports cover only
+(`recon.usage_rates`, `recon.usage_label`: the headings say "Jan 2026 - Mar 2026 only" when the usage covers part of the
+run). Example: Bhalobeshe Kono Bhool, Oct 2025 – Mar 2026 with the full-year Spotify usage report: ₹12,420.68 ÷ 52 % ÷
+254,386 plays = ₹0.0939 per play. The letter (`enquiries._draft(…, share=)`) says the expected royalty is of the song's
+total revenue and that the revenue reported is the client's share; drafts of runs before 1.6.0 keep their exact text.
+
+## 36. Version 1.6.1: variance % in percentage points, one dashboard, no Reports section
+
+**Variance %** (`recon.variance_pct`) = IPRS % − received % (`benchmark_percentage − observed_percentage`): the
+difference in percentage points (7 % expected, 1 % received → 6 %), no longer variance ÷ expected. It is computed when
+read, so earlier runs show it the new way too. The check section is now: … Received % · Variance % (N % − received %) ·
+Variance amount (the amount moved after the %), on the run page, in the Excel report and in the query attachment
+(`block_sheet`; TOTAL row = IPRS % − Σ received / Σ total revenue of the works compared). Excel summary sheet: received %
+and variance % of the works compared (`recon._pct_rows`). `check_note` explains it under the table.
+
+**Song report blocks on screen** match the Excel: platform blocks Amount · Period (Period, Usage) · Distribution No;
+IPRS blocks Amount · Date · Period · Distribution No - for Works, Unmatched recordings and Works not in catalogue alike.
+`block_values` attaches plays to the platform blocks only (an IPRS block no longer shows its date / period / number for
+a song IPRS did not list just because the song had plays).
+
+**Start page.** The Platform list offers only platforms with both a revenue report and an IPRS statement
+(`revenue_months` and `iprs`); the Platforms table shows Choose only for those. 'Which months to compare?': the IPRS
+statement periods the platform revenue meets (each with its months, the IPRS statement, the platform revenue and plays
+coverage), periods with no platform revenue named in one line instead of offered, From month / To month, and a plain
+line "Compares Spotify revenue for Oct 2025 – Mar 2026 with what IPRS paid for the same months." Earlier reconciliations:
+'Months compared'.
+
+**Run page.** The intro is that plain line. One dashboard card: the figures (works compared, revenue, total revenue,
+expected, received with its %, variance %, shortfall, plays, unlinked money, items reviewed) and the exception tiles
+under 'To review'; the underpaid and no-IPRS-entry counts are in the tiles only. The run's reference / run by / basis
+line, the 'Indicative figures' note and 'Statements used in this run' are at the bottom.
+
+**Reports section removed** from the app (nav item, `#/reports`, `#/process`; pages Process, Results, PastReports,
+DeleteRun, ReportPreview - copies in /home/swatantra/RD/backups/2026-10-24-before-1.6.1-reports-section/). The
+reconciliation (unmatched recordings, works not in catalogue, its Excel report) and the query attachment replace it.
+The processing-run API stays in the backend, unused by the screens.
+
+**Default order: song name A → Z** (no longer highest revenue / Total Amount first). Master sheet `sheet()` sort
+`title_asc` (also the fallback when a platform sort no longer applies); Works by platform `view()` / `export_view` sort
+`title` (`lower(work_title) NULLS LAST`); `GET /master/export-statement?sort=` → `master._export_order` reorders
+`res.rows` before `excel.master` (default `title_asc`; `amount_desc` = the engine's own order). Reconciliation
+`items()` and `report()` default `title` (`lower(i.work_title) NULLS LAST, item_no`); the run page passes its Sort to
+`GET /reconciliation/runs/{id}/report?sort=` (left out of the report's Filters line). Query attachment and annex:
+`lower(work_title)`, then item number.
+
+**Home, Statements** (`overview.overview` → `statement_boxes`): `iprs` = imported statements with `statement_source =
+'IPRS'`; `platforms` = imported `PLATFORM` statements per platform name. One box each (IPRS first, a platform only when
+it has reports); a box opens `#/statements/iprs` or `#/statements/platform`. The status counts and the recent-files
+list are gone from the card (`statements` by status stays in the payload for the hero's next step).

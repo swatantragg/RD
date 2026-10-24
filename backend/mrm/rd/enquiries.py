@@ -109,12 +109,14 @@ def _money(v) -> str:
 
 
 # ================================================================== creating a draft
-def attachment_name(reference: str, platform: str, a, b) -> str:
-    return f"{reference}_{xlsx.safe_name(platform)}_{a:%Y-%m}_to_{b:%Y-%m}_Songs.xlsx"
+def attachment_name(reference: str, platform: str, a, b, usage: bool = False) -> str:
+    return f"{reference}_{xlsx.safe_name(platform)}_{a:%Y-%m}_to_{b:%Y-%m}_Songs{'_with_usage' if usage else ''}.xlsx"
 
 
-def _draft(client: dict, platform: str, a, b, items: list[dict], benchmark=None, reference: str = "") -> tuple[str, str]:
-    """The letter to IPRS. The songs are not listed in it: they are in the attached song report (attachment())."""
+def _draft(client: dict, platform: str, a, b, items: list[dict], benchmark=None, reference: str = "",
+           share=None) -> tuple[str, str]:
+    """The letter to IPRS. The songs are not listed in it: they are in the attached song report (attachment()).
+    share: the run's client share % (1.6.0 on): the expected royalty is then of the song's total revenue."""
     clar = [i for i in items if i["iprs_royalty_amount"] is None]
     low = [i for i in items if i["iprs_royalty_amount"] is not None and i["indicative_variance"] is not None
            and Decimal(i["indicative_variance"]) > 0]
@@ -136,7 +138,11 @@ def _draft(client: dict, platform: str, a, b, items: list[dict], benchmark=None,
              + (f" ({attachment_name(reference, platform, a, b)})" if reference else "") + ". For each song it shows "
              f"the IPRS work number, the song name and its ISRCs; the revenue and the usage (plays) reported by "
              f"{platform} for the period; the royalty distributed by IPRS with its distribution number, date and period; "
-             f"and, for comparison, an expected royalty of {bench} of the revenue with the difference.", ""]
+             + (f"and, for comparison, an expected royalty of {bench} of the revenue with the difference." if share is None
+                else f"and, for comparison, an expected royalty of {bench} of the song's total revenue with the "
+                     f"difference." + (f" The revenue reported is our client's {Decimal(share).normalize()} % share of "
+                                       f"what the song earned on {platform}, so the total revenue is the revenue ÷ "
+                                       f"{Decimal(share).normalize()} %." if Decimal(share) != 100 else "")), ""]
     if findings:
         lines += ["Having compared these figures, " + " and ".join(findings) + ".", ""]
     lines += ["We would be grateful for your clarification of:",
@@ -164,7 +170,7 @@ def _letter(conn, e: dict, items: list[dict] | None = None) -> tuple[str, str] |
                        (e["id"],))
     client = db.one(conn, "SELECT * FROM client WHERE id = %s", (e["client_id"],))
     return _draft(client, run["platform_name"], run["usage_period_start"], run["usage_period_end"], items,
-                  run["benchmark_percentage"], e["enquiry_reference"])
+                  run["benchmark_percentage"], e["enquiry_reference"], run["client_share_pct"])
 
 
 def _eligible(it: dict) -> str | None:
@@ -237,7 +243,7 @@ def create(actor: dict, client_id: int, run_id: int, item_ids: list[int], later_
         n = (db.scalar(conn, "SELECT count(*) FROM enquiries WHERE client_id = %s", (client_id,)) or 0) + 1
         ref = f"{client['code']}-ENQ-{n:04d}"
         subject, body = _draft(client, run["platform_name"], run["usage_period_start"], run["usage_period_end"], its,
-                               run["benchmark_percentage"], ref)
+                               run["benchmark_percentage"], ref, run["client_share_pct"])
         status, why = _status_for(conn, its)
         eid = db.insert(conn, "enquiries", dict(
             client_id=client_id, enquiry_reference=ref, subject=subject, draft_body=body,
@@ -697,7 +703,7 @@ def detail(actor: dict, enquiry_id: int) -> dict:
         plat = {x["id"]: x["platform_name"] for x in db.all(conn, "SELECT id, platform_name FROM platforms")}
         items = db.all(conn, "SELECT ei.section, ei.item_status, ei.outcome_note, ri.* FROM enquiry_items ei JOIN "
                              "reconciliation_items ri ON ri.id = ei.reconciliation_item_id WHERE ei.enquiry_id = %s "
-                             "ORDER BY ei.section, ri.item_no", (enquiry_id,))
+                             "ORDER BY ei.section, lower(ri.work_title) NULLS LAST, ri.item_no", (enquiry_id,))
         events = db.all(conn, "SELECT * FROM enquiry_events WHERE enquiry_id = %s ORDER BY id DESC", (enquiry_id,))
         actions = db.all(conn, "SELECT * FROM enquiry_actions WHERE enquiry_id = %s ORDER BY status = 'OPEN' DESC, "
                                "due_at NULLS LAST, id", (enquiry_id,))
@@ -720,22 +726,23 @@ def detail(actor: dict, enquiry_id: int) -> dict:
         c["recorded_by_name"] = people.get(c["recorded_by"])
     for i in items:
         i["later_statements"] = later.get(i["internal_work_number"] or "", [])
-    att = attachment_name(e["enquiry_reference"], plat.get(e["platform_id"]) or "Platform", e["usage_period_start"],
-                          e["usage_period_end"]) if run else None
+    att = [attachment_name(e["enquiry_reference"], plat.get(e["platform_id"]) or "Platform", e["usage_period_start"],
+                           e["usage_period_end"], u) for u in (False, True)] if run else [None, None]
     return dict(enquiry=_out(e, people, plat), items=items, events=events, actions=actions, communications=comms,
-                attachment=att,
+                attachment=att[0], attachment_usage=att[1],
                 allowed=_allowed(actor, e), run=dict(id=run["id"], reference=run["run_reference"]) if run else None,
                 assignees=assignees, can_assign=access.can(actor, "assign_followups"),
                 editable=e["status"] in DRAFTING, text_current=current, missing_text=MISSING_IPRS,
                 comm_types=list(COMM_TYPES))
 
 
-def attachment(actor: dict, enquiry_id: int) -> tuple[str, bytes]:
+def attachment(actor: dict, enquiry_id: int, usage: bool = False) -> tuple[str, bytes]:
     """The song report sent with the letter: the enquiry's songs in the reconciliation layout - Internal No, song name,
-    ISRC; the platform's revenue and usage per report; the IPRS royalty per distribution; expected vs paid."""
+    ISRC; the platform's revenue and usage per report; the IPRS royalty per distribution; expected vs received.
+    usage: the same report with the song's usage and its total revenue per usage at the end."""
     from openpyxl import Workbook
     from .excel import stable
-    from .recon import block_sheet, block_values, run_blocks
+    from .recon import block_sheet, block_values, check_note, run_blocks, usage_label, usage_rates
     with access.tx(actor) as conn:
         e = _get(conn, enquiry_id)
         run = db.one(conn, "SELECT r.*, p.platform_name, c.code, c.name AS client_name FROM reconciliation_runs r JOIN "
@@ -745,23 +752,30 @@ def attachment(actor: dict, enquiry_id: int) -> tuple[str, bytes]:
             raise EnquiryError("This enquiry has no reconciliation to build its song report from.")
         its = db.all(conn, "SELECT ri.* FROM enquiry_items ei JOIN reconciliation_items ri ON ri.id = "
                            "ei.reconciliation_item_id WHERE ei.enquiry_id = %s AND ei.item_status <> 'REMOVED' ORDER BY "
-                           "ri.sound_recording_revenue DESC NULLS LAST, ri.item_no", (enquiry_id,))
+                           "lower(ri.work_title) NULLS LAST, ri.item_no", (enquiry_id,))
         blocks = run_blocks(conn, run)
         vals = block_values(conn, [i["id"] for i in its], blocks)
+        rates = usage_rates(conn, run, [i["id"] for i in its]) if usage else None
         audit.record(conn, "export.enquiry_attachment", actor, "enquiries", enquiry_id,
-                     dict(reference=e["enquiry_reference"], songs=len(its)))
+                     dict(reference=e["enquiry_reference"], songs=len(its), with_usage=usage))
     a, b = e["usage_period_start"], e["usage_period_end"]
+    part = usage_label(run)
+    per_usage = [] if not usage else [
+        "Usage = the plays the platform reported for the song" + (f" ({part})" if part else "") + "; revenue per usage "
+        "= the song's total revenue" + (" of the same months" if part else "") + " ÷ its usage."]
     wb = Workbook()
     block_sheet(wb, "Songs", platform=run["platform_name"], client_code=run["code"],
                 benchmark=run["benchmark_percentage"], blocks=blocks, items=its, values=vals,
-                interest=run["client_interest_pct"],
+                interest=run["client_interest_pct"], share=run["client_share_pct"],
+                usage=dict(rates=rates, label=part) if usage else None,
                 notes=[f"{run['client_name']} - {run['platform_name']} songs for {_period(a, b)} "
                        f"({e['enquiry_reference']}).",
-                       "Usage = the plays the platform reported for the song in the period shown. Expected value = "
-                       f"{Decimal(run['benchmark_percentage']).normalize()} % of the revenue; Variance = expected - "
-                       "IPRS paid; Variance % = variance / expected. Indicative figures for clarification only, not a "
-                       "claim of any amount payable. An empty cell means no record."])
-    return attachment_name(e["enquiry_reference"], run["platform_name"], a, b), stable(wb)
+                       "Usage (in the platform section) = the plays the platform reported for the song in the period "
+                       "shown.", check_note(run["benchmark_percentage"], run["client_share_pct"],
+                                            run["client_interest_pct"])] + per_usage
+                + ["Indicative figures for clarification only, not a claim of any amount payable. An empty cell means "
+                   "no record."])
+    return attachment_name(e["enquiry_reference"], run["platform_name"], a, b, usage), stable(wb)
 
 
 def annex(actor: dict, enquiry_id: int) -> tuple[str, bytes]:
@@ -772,7 +786,8 @@ def annex(actor: dict, enquiry_id: int) -> tuple[str, bytes]:
         audit.record(conn, "export.enquiry_annex", actor, "enquiries", enquiry_id, dict(reference=e["enquiry_reference"]))
     rows = [[i["item_no"], "Clarification (no IPRS entry)" if i["section"] == "CLARIFICATION" else "Variance",
              i["internal_work_number"], i["work_title"], i["isrcs"], i["sound_recording_revenue"],
-             i["iprs_royalty_amount"], i["reference_benchmark_amount"], i["indicative_variance"],
+             i["eligible_revenue_basis"], i["iprs_royalty_amount"], i["reference_benchmark_amount"],
+             i["indicative_variance"],
              i["mapping_status"].title(), i["item_status"].replace("_", " ").title(), i["outcome_note"]]
             for i in d["items"]]
     data = xlsx.book([dict(
@@ -781,9 +796,10 @@ def annex(actor: dict, enquiry_id: int) -> tuple[str, bytes]:
                                 "amounts payable and are not part of the enquiry text.",
                                 f"Missing entries read: '{MISSING_IPRS}'"],
         columns=[("Item", 6, None), ("Section", 26, None), ("Work number", 12, None), ("Title", 34, None),
-                 ("ISRCs", 30, None), ("[Source] Revenue (client's statements)", 16, "money"),
-                 ("[Source] IPRS royalty", 14, "money"), ("[Calculated] Indicative Reference Benchmark", 16, "money"),
-                 ("[Calculated] Indicative Variance - Requires Verification", 18, "money"), ("Mapping", 12, None),
+                 ("ISRCs", 30, None), ("[Platform] Revenue (the client's share)", 16, "money"),
+                 ("[Calculated] Total revenue (100 %)", 16, "money"), ("[IPRS] Royalty received", 14, "money"),
+                 ("[Calculated] Expected royalty", 16, "money"),
+                 ("[Calculated] Variance - requires verification", 18, "money"), ("Mapping", 12, None),
                  ("Item status", 14, None), ("Outcome", 40, None)], rows=rows),
         dict(title="Draft", columns=[("Draft text", 120, None)],
              rows=[[e["subject"]], [""]] + [[ln] for ln in e["draft_body"].splitlines()]),

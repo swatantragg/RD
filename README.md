@@ -64,7 +64,7 @@ administrator to Super Admin, other administrators to Admin and everyone else to
 
 Click your **initials** (top right) for your profile, role, the **Light / Dark** theme and sign out. After each update a
 one-time **What's new** note appears in the bottom-right corner; click it to read the changes. The version is shown
-in the bottom-right corner of the footer (**V1.4.4**); click it to read every version's notes.
+in the bottom-right corner of the footer (**V1.6.0**); click it to read every version's notes.
 
 **Clients:** SVF is set up already. Admins add more under **Settings → Clients → Add a client** (or **Add a new
 client** in step 1 of a run): a short code (used in report names, e.g. `ACME-RD-SKV1`), the name and the rights

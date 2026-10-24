@@ -17,22 +17,23 @@ type List = { rows: St[]; total: number; offset: number; counts: Record<string, 
   statuses: { value: string; label: string }[]; types: { value: string; label: string }[]; sources: { value: string; label: string }[];
   sides: Record<string, number> };
 
-/** The kind of a statement: a platform report, a client statement or an IPRS statement (its tab). */
+/** The kind of a statement: a platform report or an IPRS statement (its tab). */
 export function SidePill({ source, label }: { source: string; label: string }) {
   return <Pill tone={source === "IPRS" ? "good" : source === "PLATFORM" ? "neutral" : "info"}>{label}</Pill>;
 }
 
+/** Two tabs: the platform's reports, and the IPRS statements (received from IPRS or forwarded by the client - the
+ *  client's statements had a tab of their own until 1.6.0; '#/statements/client' opens the IPRS tab). */
 export const STATEMENT_TABS = [
-  { key: "platform", source: "PLATFORM", label: "Platform reports", title: "Upload platform reports (revenue and usage)",
+  { key: "platform", source: "PLATFORM", label: "Platform reports", one: "platform report", many: "platform reports", title: "Upload platform reports (revenue and usage)",
     drop: "Drag the platform's revenue and usage reports here", empty: "Upload the platform's revenue report and its usage report above." },
-  { key: "client", source: "CLIENT", label: "Client statements", title: "Upload the client's statements",
-    drop: "Drag the client's statements here", empty: "Upload the client's statements above - all platforms at once." },
-  { key: "iprs", source: "IPRS", label: "IPRS statements", title: "Upload the statements received from IPRS",
-    drop: "Drag the IPRS statements here", empty: "Upload the statements received from IPRS above." },
+  { key: "iprs", source: "IPRS", label: "IPRS statements", one: "IPRS statement", many: "IPRS statements", title: "Upload IPRS statements (from IPRS or forwarded by the client)",
+    drop: "Drag the IPRS statements here - all platforms at once", empty: "Upload the IPRS statements above - the ones received from IPRS and the ones the client forwards." },
 ] as const;
 
 export default function Statements({ id, tab }: { id?: number; tab?: string }) {
-  return <NeedClient>{(cid) => (id ? <StatementPage id={id} /> : <Library key={tab ?? "platform"} cid={cid} tab={tab} />)}</NeedClient>;
+  const t = tab === "client" ? "iprs" : tab;
+  return <NeedClient>{(cid) => (id ? <StatementPage id={id} /> : <Library key={t ?? "platform"} cid={cid} tab={t} />)}</NeedClient>;
 }
 
 const LIB_FILTERS = { platform_id: "", status: "", q: "" };
@@ -114,12 +115,12 @@ function Library({ cid, tab }: { cid: number; tab?: string }) {
                   options={[{ value: "", label: "Any status" }, ...(d?.statuses ?? []).map((s) => ({ ...s, meta: d?.counts[s.value] ? int(d.counts[s.value]) : undefined }))]} />
           <ResetFilters active={changed(f, LIB_FILTERS)} onReset={() => { setF(LIB_FILTERS); setOffset(0); }} />
         </div>
-        {d && d.counts.NEEDS_REVIEW > 0 && <Notice tone="warn">{d.counts.NEEDS_REVIEW} {t.label.toLowerCase().replace(/s$/, "")}{d.counts.NEEDS_REVIEW === 1 ? " needs" : "s need"} an answer before {d.counts.NEEDS_REVIEW === 1 ? "it counts" : "they count"}.
+        {d && d.counts.NEEDS_REVIEW > 0 && <Notice tone="warn">{d.counts.NEEDS_REVIEW} {d.counts.NEEDS_REVIEW === 1 ? `${t.one} needs` : `${t.many} need`} an answer before {d.counts.NEEDS_REVIEW === 1 ? "it counts" : "they count"}.
           <Button kind="ghost" className="sm" onClick={() => set("status", "NEEDS_REVIEW")}>Show them</Button></Notice>}
-        {!b ? <Loading /> : b.rows.length === 0 ? <Empty title={changed(f, LIB_FILTERS) ? "No batch matches" : `No ${t.label.toLowerCase()} yet`}>{changed(f, LIB_FILTERS) ? "" : t.empty}</Empty> : (
+        {!b ? <Loading /> : b.rows.length === 0 ? <Empty title={changed(f, LIB_FILTERS) ? "No batch matches" : `No ${t.many} yet`}>{changed(f, LIB_FILTERS) ? "" : t.empty}</Empty> : (
           <ScrollX label={t.label}>
             <table className="tbl">
-              <thead><tr><th>Batch</th><th>{t.source === "CLIENT" ? "Platforms" : "Platform"}</th><th>Usage period</th><th className="num">Files</th><th>Status</th>
+              <thead><tr><th>Batch</th><th>{isrc ? "Platform" : "Platforms"}</th><th>Usage period</th><th className="num">Files</th><th>Status</th>
                 <th className="num">Lines</th><th className="num">{isrc ? "Revenue" : "Total"}</th>{isrc && <th className="num">Plays</th>}<th>Uploaded</th></tr></thead>
               <tbody>{b.rows.map((x) => (
                 <tr key={x.id} className="click" onClick={() => setOpenBatch(x.id)}>
@@ -262,7 +263,7 @@ function RecordsExport({ cid, source, platforms }: { cid: number; source: string
       <div className="actions">
         <DownloadButton kind="secondary" onError={(m) => toast(m, true)}
                         path={`/records/export${qs({ client_id: cid, record_type: t, source, platform_id: p, period_from: monthStart(from), period_to: monthEnd(to) })}`}>Export records</DownloadButton>
-        <Selection parts={[source === "PLATFORM" ? "platform revenue lines" : source === "CLIENT" ? "client statement lines" : "IPRS statement lines", plat ?? "all platforms",
+        <Selection parts={[source === "PLATFORM" ? "platform revenue lines" : "IPRS statement lines", plat ?? "all platforms",
           from && to ? `${mon(from)} – ${mon(to)}` : "all periods"]} />
       </div>
     </Card>
@@ -295,7 +296,7 @@ function StatementPage({ id }: { id: number }) {
   return (
     <Page title={s.filename} intro={<>{s.type_label} · statement #{s.id} · uploaded {when(s.uploaded_at)}{s.uploaded_by ? ` by ${s.uploaded_by}` : ""}</>}
           actions={<>
-            <Button kind="ghost" onClick={() => go(`statements/${STATEMENT_TABS.find((x) => x.source === s.source)?.key ?? "platform"}`)}>{STATEMENT_TABS.find((x) => x.source === s.source)?.label ?? "All statements"}</Button>
+            <Button kind="ghost" onClick={() => go(`statements/${STATEMENT_TABS.find((x) => x.source === s.source)?.key ?? "iprs"}`)}>{STATEMENT_TABS.find((x) => x.source === s.source)?.label ?? "All statements"}</Button>
             <DownloadButton kind="secondary" path={`/statements/${id}/original`} onError={(m) => toast(m, true)}>Original file</DownloadButton>
             <DownloadButton kind="secondary" path={`/statements/${id}/error-report`} onError={(m) => toast(m, true)}>Error report</DownloadButton>
           </>}>
@@ -303,9 +304,9 @@ function StatementPage({ id }: { id: number }) {
         {d.questions.length > 0 && me.can.prepare && <Questions id={id} questions={d.questions} />}
         <div className="two">
           <Facts items={[
-            ["Kind", <>{me.can.prepare && s.source !== "PLATFORM" ? <Select size="sm" value={s.source} onChange={(v) => save({ statement_source: v })}
-                                                       options={[{ value: "CLIENT", label: "Client statement", hint: "What the client's statement shows for each work" }, { value: "IPRS", label: "IPRS statement", hint: "What IPRS paid for each work" }]} /> : s.side_label}
-              <div className="muted small">{s.source === "PLATFORM" ? "Revenue and usage per ISRC: the basis of the 4 % reference" : s.source === "IPRS" ? "Compared with 4 % of the platform revenue" : "Shown beside what IPRS paid"}</div></>],
+            ["Kind", <>{s.side_label}
+              <div className="muted small">{s.source === "PLATFORM" ? "Revenue (the client's share) and usage per ISRC: the basis of the expected royalty"
+                : s.source === "IPRS" ? "What IPRS paid, compared with the IPRS % of each song's total revenue" : "Left out: the same file is under IPRS statements"}</div></>],
             ["Layout", s.type_label],
             ["Platform", s.platform ? `${s.platform}${s.reported_platform && s.reported_platform !== s.platform ? ` (written '${s.reported_platform}')` : ""}`
               : <span className="muted">{s.reported_platform ? `'${s.reported_platform}' - not a platform` : "not a platform statement"}</span>],

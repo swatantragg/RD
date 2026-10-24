@@ -18,10 +18,13 @@ def overview(actor: dict, client_id: int) -> dict:
                                            "mapping_status = 'CONFLICT'", (client_id,))
         sts = {r["import_status"]: r["n"] for r in db.all(conn, "SELECT import_status, count(*) AS n FROM statements "
                                                                  "WHERE client_id = %s GROUP BY 1", (client_id,))}
-        recent = db.all(conn, "SELECT s.id, s.original_filename, s.record_type, s.import_status, s.uploaded_at, "
-                              "s.usage_period_start, s.usage_period_end, p.platform_name FROM statements s LEFT JOIN "
-                              "platforms p ON p.id = s.platform_id WHERE s.client_id = %s ORDER BY s.uploaded_at DESC, "
-                              "s.id DESC LIMIT 5", (client_id,))
+        # the statements that count: those received from IPRS, and the platform's reports per platform
+        iprs = db.scalar(conn, "SELECT count(*) FROM statements WHERE client_id = %s AND statement_source = 'IPRS' AND "
+                               "import_status = 'IMPORTED'", (client_id,))
+        plats = db.all(conn, "SELECT coalesce(p.platform_name, 'Platform not stated') AS name, count(*) AS n FROM "
+                             "statements s LEFT JOIN platforms p ON p.id = s.platform_id WHERE s.client_id = %s AND "
+                             "s.statement_source = 'PLATFORM' AND s.import_status = 'IMPORTED' GROUP BY 1 ORDER BY 1",
+                       (client_id,))
         runs = db.all(conn, "SELECT r.id, r.run_reference, r.usage_period_start, r.usage_period_end, r.summary, "
                             "r.started_at, p.platform_name FROM reconciliation_runs r JOIN platforms p ON p.id = "
                             "r.platform_id WHERE r.client_id = %s AND r.status = 'COMPLETED' ORDER BY r.id DESC LIMIT 4",
@@ -30,5 +33,6 @@ def overview(actor: dict, client_id: int) -> dict:
                             (client_id,))
     dash = enquiries.dashboard(actor, client_id)
     mine = [a for a in dash["actions"] if a["mine"]]
-    return dict(catalogue=cat, statements=sts, recent_statements=recent, runs=runs, previews_waiting=imports,
+    return dict(catalogue=cat, statements=sts, statement_boxes=dict(iprs=iprs, platforms=plats), runs=runs,
+                previews_waiting=imports,
                 queues=dash["queues"], my_actions=mine[:8], overdue=sum(1 for a in dash["actions"] if a["overdue"]))

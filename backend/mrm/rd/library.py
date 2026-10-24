@@ -1,11 +1,10 @@
 """The statement library: every report and statement the client's work depends on, uploaded in any order and kept for
-good. Three kinds, each with its own tab under Statements (statement_source), chosen by the person uploading:
+good. Two kinds, each with its own tab under Statements (statement_source), chosen by the person uploading:
   PLATFORM  the platform's reports (for example MRM's Spotify report): revenue and usage per ISRC and month. Revenue
             and usage may come in one file or in two; they are combined by ISRC and song name, month by month
-  CLIENT    the client's statements per platform (per work, the IPRS layout): what the client's statements show
-  IPRS      statements received from IPRS: what IPRS paid
-One stored file can be a client statement and an IPRS statement once each (the client's copy and IPRS's copy of the
-same statement). What the file holds is a separate fact:
+  IPRS      IPRS statements: what IPRS paid, received from IPRS or forwarded by the client (the same IPRS layout)
+Until 1.6.0 the client's forwarded statements had a tab of their own (CLIENT); migration 0013 made them IPRS
+statements. What the file holds is a separate fact:
   WORK_ROYALTY       money per musical work (WORK INT NO), party by party (the IPRS distribution layout)
   RECORDING_REVENUE  revenue per ISRC and month (plays too, when the report has them)
   RECORDING_USAGE    plays per ISRC and month, without money
@@ -33,9 +32,11 @@ from .service import RDError, _file_out, client_cfg
 TYPE_OF = {STATEMENT: "WORK_ROYALTY", PLATFORM_REVENUE: "RECORDING_REVENUE", PLATFORM_USAGE: "RECORDING_USAGE"}
 TYPE_LABEL = {"WORK_ROYALTY": "Per work (IPRS layout)", "RECORDING_REVENUE": "Revenue per ISRC and month",
               "RECORDING_USAGE": "Usage per ISRC and month"}
-SOURCE_LABEL = {"PLATFORM": "Platform", "CLIENT": "Client", "IPRS": "IPRS"}
-SIDE_LABEL = {"PLATFORM": "Platform report", "CLIENT": "Client statement", "IPRS": "IPRS statement"}
-TAB_LABEL = {"PLATFORM": "Platform reports", "CLIENT": "Client statements", "IPRS": "IPRS statements"}
+SOURCES = ("PLATFORM", "IPRS")                     # the tabs under Statements
+# CLIENT: only a client's copy of a file that is also under IPRS statements, left out by migration 0013
+SOURCE_LABEL = {"PLATFORM": "Platform", "IPRS": "IPRS", "CLIENT": "Client (before 1.6.0)"}
+SIDE_LABEL = {"PLATFORM": "Platform report", "IPRS": "IPRS statement", "CLIENT": "Client statement (before 1.6.0)"}
+TAB_LABEL = {"PLATFORM": "Platform reports", "IPRS": "IPRS statements", "CLIENT": "Client statements (before 1.6.0)"}
 ISRC_TYPES = ("RECORDING_REVENUE", "RECORDING_USAGE")
 STATUS_TEXT = {"IMPORTED": "Imported", "NEEDS_REVIEW": "Needs your answer", "REJECTED": "Rejected",
                "DUPLICATE": "Duplicate - counted once", "SUPERSEDED": "Replaced by a correction",
@@ -48,14 +49,13 @@ RELATION_OPTIONS = [dict(value="CORRECTION", label="It corrects the earlier stat
 _WORK = "a royalty statement in the IPRS layout (WORK INT NO … ROYALTY AMT)"
 ALLOWED = {"PLATFORM": {PLATFORM_REVENUE: "a platform revenue report (month, ISRC, song, revenue)",
                         PLATFORM_USAGE: "a platform usage report (month, ISRC, song, plays or streams)"},
-           "CLIENT": {STATEMENT: _WORK}, "IPRS": {STATEMENT: _WORK}}
+           "IPRS": {STATEMENT: _WORK}}
 _REFUSE = {"SONG_LIST": "This is a song catalogue. Upload it under Catalogue → Import catalogue.",
            "REVIEW_LIST": "This is a song list with review statuses. Upload it under Catalogue, or in a processing run.",
            "PREVIOUS_OUTPUT": "This is a master report (SKV layout). Use Reports → New processing run for it."}
 _PLATFORM_ELSEWHERE = "This is a platform report (per ISRC and month). Upload it under Statements → Platform reports."
 REFUSE = {"PLATFORM": dict(_REFUSE, STATEMENT="This is a royalty statement (per work). Upload it under Statements → "
-                                              "Client statements or IPRS statements."),
-          "CLIENT": dict(_REFUSE, PLATFORM_REVENUE=_PLATFORM_ELSEWHERE, PLATFORM_USAGE=_PLATFORM_ELSEWHERE),
+                                              "IPRS statements."),
           "IPRS": dict(_REFUSE, PLATFORM_REVENUE=_PLATFORM_ELSEWHERE, PLATFORM_USAGE=_PLATFORM_ELSEWHERE)}
 META_FIELDS = ("category", "dist_no", "overseas_society", "period", "date", "platform", "distributor", "currency",
                "basis")
@@ -236,8 +236,9 @@ def _batch(conn, actor: dict, client_id: int, source: str, key: str) -> dict:
 
 def upload(actor: dict, client_id: int, filename: str, data: bytes, source: str | None = None,
            batch_key: str | None = None) -> dict:
-    if source not in SOURCE_LABEL:
-        raise StatementError("Choose the tab first: Platform reports, Client statements or IPRS statements.")
+    source = "IPRS" if source == "CLIENT" else source          # a screen from before 1.6.0
+    if source not in SOURCES:
+        raise StatementError("Choose the tab first: Platform reports or IPRS statements.")
     f, reused = intake.store(actor, client_id, filename, data, ALLOWED[source], REFUSE[source])
     with access.tx(actor, client_id) as conn:
         before = db.one(conn, "SELECT * FROM statements WHERE file_id = %s AND statement_source = %s", (f["id"], source))
@@ -320,11 +321,11 @@ def update(actor: dict, statement_id: int, body: dict) -> dict:
         vals = {}
         if body.get("statement_source") and body["statement_source"] != st["statement_source"]:
             new_source = body["statement_source"]
-            if new_source not in SOURCE_LABEL:
-                raise StatementError("Choose Platform reports, Client statements or IPRS statements.")
+            if new_source not in SOURCES:
+                raise StatementError("Choose Platform reports or IPRS statements.")
             if (new_source == "PLATFORM") != (st["record_type"] in ISRC_TYPES):
-                raise StatementError("A per-ISRC report is always a platform report, and a per-work statement is a "
-                                     "client statement or an IPRS statement.")
+                raise StatementError("A per-ISRC report is always a platform report, and a per-work statement is "
+                                     "always an IPRS statement.")
             twin = db.scalar(conn, "SELECT id FROM statements WHERE file_id = %s AND statement_source = %s",
                              (st["file_id"], new_source))
             if twin:
@@ -410,7 +411,7 @@ def listing(actor: dict, client_id: int, record_type: str | None = None, platfor
                             "s.platform_id WHERE s.client_id = %s AND (%s::TEXT IS NULL OR s.statement_source = %s) "
                             "ORDER BY p.platform_name", (client_id, source, source))
     return dict(rows=[_out(r, plat, people) for r in rows], total=total, offset=offset, counts=counts, sides=sides,
-                sources=[dict(value=k, label=TAB_LABEL[k]) for k in SOURCE_LABEL], platforms=used,
+                sources=[dict(value=k, label=TAB_LABEL[k]) for k in SOURCES], platforms=used,
                 statuses=[dict(value=k, label=v) for k, v in STATUS_TEXT.items()],
                 types=[dict(value=k, label=v) for k, v in TYPE_LABEL.items()
                        if not source or (source == "PLATFORM") == (k in ISRC_TYPES)])
@@ -422,12 +423,12 @@ def _plabel(a, b) -> str:
     return f"{a:%b %Y}" if (a.year, a.month) == (b.year, b.month) else f"{a:%b %Y} - {b:%b %Y}"
 
 
-def _batch_out(r: dict, source: str, people: dict) -> dict:
+def _batch_out(r: dict, people: dict) -> dict:
     plats = sorted(r["platforms"] or [])
     pl = ", ".join(plats) if len(plats) <= 3 else f"{len(plats)} platforms"
     period = _plabel(r["period_start"], r["period_end"])
-    label = " · ".join(x for x in (f"Batch {r['batch_no']}" if r["batch_no"] else "Without a batch",
-                                   pl if source != "CLIENT" and pl else None, period) if x)
+    label = " · ".join(x for x in (f"Batch {r['batch_no']}" if r["batch_no"] else "Without a batch", pl or None,
+                                   period) if x)
     return dict(id=r["id"], batch_no=r["batch_no"], label=label, platforms=plats, period_start=r["period_start"],
                 period_end=r["period_end"], period_label=period, no_period=r["no_period"], files=r["files"],
                 matching=r.get("matching"), statuses={k: r[k] for k in ("IMPORTED", "NEEDS_REVIEW", "DUPLICATE",
@@ -452,8 +453,9 @@ def batches(actor: dict, client_id: int, source: str, platform_id: int | None = 
             q: str | None = None, offset: int = 0) -> dict:
     """One row per upload batch of a tab: its platforms, the usage period it spans, its files and their status. The
     filters pick the batches with at least one matching file."""
-    if source not in SOURCE_LABEL:
-        raise StatementError("Choose Platform reports, Client statements or IPRS statements.")
+    source = "IPRS" if source == "CLIENT" else source
+    if source not in SOURCES:
+        raise StatementError("Choose Platform reports or IPRS statements.")
     with access.tx(actor, client_id) as conn:
         where, p = ["s.client_id = %(c)s", "s.statement_source = %(src)s"], dict(c=client_id, src=source,
                                                                                o=max(0, offset))
@@ -476,7 +478,7 @@ def batches(actor: dict, client_id: int, source: str, platform_id: int | None = 
         total = db.scalar(conn, f"SELECT count(*) FROM ({match}) m", p)
         files = db.scalar(conn, f"SELECT count(*) FROM statements s WHERE {' AND '.join(where)}", p)
         people = {x["id"]: x["name"] for x in db.all(conn, "SELECT id, name FROM app_user")}
-    return dict(rows=[_batch_out(r, source, people) for r in rows], total=total, files=files, offset=offset)
+    return dict(rows=[_batch_out(r, people) for r in rows], total=total, files=files, offset=offset)
 
 
 def batch(actor: dict, batch_id: int) -> dict:
@@ -496,7 +498,7 @@ def batch(actor: dict, batch_id: int) -> dict:
     order = {"NEEDS_REVIEW": 0, "REJECTED": 1, "IMPORTED": 2}
     sts.sort(key=lambda x: (order.get(x["import_status"], 3), plat.get(x["platform_id"]) or "~",
                             x["usage_period_start"] or dt.date.max, x["original_filename"]))
-    return dict(batch=_batch_out(r, sts[0]["statement_source"], people), source=sts[0]["statement_source"],
+    return dict(batch=_batch_out(r, people), source=sts[0]["statement_source"],
                 statements=[_out(x, plat, people) for x in sts])
 
 
@@ -648,7 +650,7 @@ def export_records(actor: dict, client_id: int, record_type: str, platform_id: i
         code = db.scalar(conn, "SELECT code FROM client WHERE id = %s", (client_id,))
         plat, _ = _maps(conn)
         p: dict = dict(c=client_id, pl=platform_id, a=period_from, b=period_to, s=statement_id, m=mapping,
-                       src=source if source in SOURCE_LABEL else None)
+                       src=source if source in SOURCES else None)
         common = ("r.client_id = %(c)s AND r.import_status = 'IMPORTED' AND (%(src)s::TEXT IS NULL OR "
                   "r.statement_source = %(src)s) AND (%(pl)s::BIGINT IS NULL OR r.platform_id = "
                   "%(pl)s) AND (%(s)s::BIGINT IS NULL OR r.statement_id = %(s)s) AND (%(m)s::TEXT IS NULL OR "
@@ -695,8 +697,7 @@ def export_records(actor: dict, client_id: int, record_type: str, platform_id: i
                           statement_id=statement_id, rows=len(rows)))
     span = f"{period_from:%Y-%m}_to_{period_to:%Y-%m}" if period_from and period_to else "All_Periods"
     what = "Platform_Revenue_Records" if record_type == "RECORDING_REVENUE" else \
-        "Client_Statement_Records" if source == "CLIENT" else "IPRS_Statement_Records" if source == "IPRS" else \
-        "Per_Work_Records"
+        "IPRS_Statement_Records" if source == "IPRS" else "Per_Work_Records"
     pname = xlsx.safe_name(plat.get(platform_id, "")) if platform_id else ""
     name = "_".join(x for x in (code, pname, what, span) if x) + ".xlsx"
     heading = [f"{code} - {TYPE_LABEL[record_type]}",
