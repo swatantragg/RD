@@ -26,13 +26,19 @@ def overview(actor: dict, client_id: int) -> dict:
                              "s.statement_source = 'PLATFORM' AND s.import_status = 'IMPORTED' GROUP BY 1 ORDER BY 1",
                        (client_id,))
         runs = db.all(conn, "SELECT r.id, r.run_reference, r.usage_period_start, r.usage_period_end, r.summary, "
-                            "r.started_at, p.platform_name FROM reconciliation_runs r JOIN platforms p ON p.id = "
-                            "r.platform_id WHERE r.client_id = %s AND r.status = 'COMPLETED' ORDER BY r.id DESC LIMIT 4",
+                            "r.started_at, r.verified_at, v.name AS verified_by, p.platform_name FROM "
+                            "reconciliation_runs r JOIN platforms p ON p.id = r.platform_id LEFT JOIN app_user v ON v.id = "
+                            "r.verified_by WHERE r.client_id = %s AND r.status = 'COMPLETED' ORDER BY r.id DESC LIMIT 4",
                       (client_id,))
         imports = db.scalar(conn, "SELECT count(*) FROM catalogue_imports WHERE client_id = %s AND status = 'PREVIEW'",
                             (client_id,))
+        # the catalogues received: which file, when it was imported and how it came (mail or WhatsApp)
+        received = db.all(conn, "SELECT i.id, i.original_filename AS filename, i.applied_at, i.received_via, "
+                                "i.received_from, u.name AS imported_by FROM catalogue_imports i LEFT JOIN app_user u ON "
+                                "u.id = i.reviewed_by WHERE i.client_id = %s AND i.status = 'APPLIED' ORDER BY "
+                                "i.applied_at DESC LIMIT 4", (client_id,))
     dash = enquiries.dashboard(actor, client_id)
     mine = [a for a in dash["actions"] if a["mine"]]
     return dict(catalogue=cat, statements=sts, statement_boxes=dict(iprs=iprs, platforms=plats), runs=runs,
-                previews_waiting=imports,
+                previews_waiting=imports, catalogue_received=received, waiting=enquiries.waiting(actor, client_id),
                 queues=dash["queues"], my_actions=mine[:8], overdue=sum(1 for a in dash["actions"] if a["overdue"]))

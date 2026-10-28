@@ -374,14 +374,25 @@ def import_view(actor: dict, import_id: int, status: str | None = None, action: 
                 file_id=imp["file_id"], sheet=imp["source_sheet"], header_row=imp["header_row"],
                 uploaded_by=imp["uploaded_by_name"], uploaded_at=imp["uploaded_at"],
                 reviewed_by=imp["reviewed_by_name"], applied_at=imp["applied_at"], counts=imp["counts"],
+                received_via=RECEIVED_VIA.get(imp["received_via"] or ""), received_from=imp["received_from"],
                 verify_mappings=imp["verify_mappings"], stale=stale, rows=rows, total=total, offset=offset, page=PAGE,
                 actions=[dict(value=k, label=v) for k, v in ACTION_LABEL.items()],
                 statuses=[dict(value=k, label=v) for k, v in STATUS_LABEL.items()], note=None)
 
 
-def apply_import(actor: dict, import_id: int, verify: bool = True) -> dict:
-    """Apply a reviewed preview in one transaction. A preview made against an older catalogue is refreshed instead."""
+RECEIVED_VIA = {"EMAIL": "Mail", "WHATSAPP": "WhatsApp", "OTHER": "Other"}
+
+
+def apply_import(actor: dict, import_id: int, verify: bool = True, received_via: str | None = None,
+                 received_from: str | None = None) -> dict:
+    """Apply a reviewed preview in one transaction. A preview made against an older catalogue is refreshed instead.
+    received_via / received_from: how the catalogue came (mail or WhatsApp) and from whom, shown on Home."""
     access.require(actor, "prepare")
+    verify = verify and access.can(actor, "verify_mappings")   # only an Admin marks links verified (1.7.3)
+    received_via = (received_via or "").upper() or None
+    if received_via not in RECEIVED_VIA:
+        raise CatalogueError("Say how the catalogue was received: by mail or on WhatsApp.")
+    received_from = (received_from or "").strip() or None
     with access.tx(actor) as conn:
         imp = db.one(conn, "SELECT * FROM catalogue_imports WHERE id = %s FOR UPDATE", (import_id,))
         if not imp:
@@ -494,14 +505,16 @@ def apply_import(actor: dict, import_id: int, verify: bool = True) -> dict:
                      "validation_status NOT IN ('INVALID', 'DUPLICATE')", (import_id,))
         db.update(conn, "catalogue_imports", import_id, dict(status="APPLIED", reviewed_by=actor["id"],
                                                              reviewed_at="now", applied_at="now",
-                                                             verify_mappings=verify))
+                                                             verify_mappings=verify, received_via=received_via,
+                                                             received_from=received_from))
         summary = dict(works_created=sum(1 for k in work_id if k not in cur["by_no"] and
                                          k.removeprefix("new:") not in cur["unreg"]),
                        links_created=len(links), conflicts=len(conflict_isrcs), older_links_flagged=flagged,
                        albums_filled=filled,
                        verified=verify)
         audit.record(conn, "catalogue.import_applied", actor, "catalogue_imports", import_id,
-                     dict(filename=imp["original_filename"], **summary))
+                     dict(filename=imp["original_filename"], received_via=RECEIVED_VIA[received_via],
+                          received_from=received_from, **summary))
     out = import_view(actor, import_id)
     out["applied"] = summary
     return out
@@ -524,7 +537,8 @@ def imports(actor: dict, client_id: int) -> list[dict]:
     with access.tx(actor, client_id) as conn:
         return db.all(conn, "SELECT i.id, i.original_filename AS filename, i.status, i.uploaded_at, i.applied_at, "
                             "i.total_rows, i.new_works_count, i.new_mappings_count, i.conflict_count, "
-                            "i.invalid_rows_count, i.duplicate_rows_count, u.name AS uploaded_by FROM catalogue_imports i "
+                            "i.invalid_rows_count, i.duplicate_rows_count, i.received_via, i.received_from, u.name AS "
+                            "uploaded_by FROM catalogue_imports i "
                             "LEFT JOIN app_user u ON u.id = i.uploaded_by WHERE i.client_id = %s ORDER BY i.id DESC "
                             "LIMIT 50", (client_id,))
 
@@ -702,7 +716,7 @@ def add_link(actor: dict, work_id: int, body: dict) -> dict:
     code = norm_isrc(body.get("isrc"))
     if not is_isrc(code):
         raise CatalogueError("Please enter a valid ISRC (12 characters, for example INS2X1400012).")
-    verify = bool(body.get("verify")) and access.can(actor, "verify_mappings")
+    verify = body.get("verify") is True and access.can(actor, "verify_mappings")
     note = s(body.get("note")) or None
     with access.tx(actor) as conn:
         w = db.one(conn, "SELECT * FROM works WHERE id = %s AND deleted_at IS NULL", (work_id,))

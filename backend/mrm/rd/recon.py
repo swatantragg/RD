@@ -41,7 +41,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border
 from openpyxl.utils import get_column_letter
 
-from . import access, excel, platforms, xlsx
+from . import access, excel, notify, platforms, xlsx
 from .detect import money
 from .service import RDError
 
@@ -449,6 +449,12 @@ def options(actor: dict, client_id: int) -> dict:
         us = sorted(usage_months.get(pid, set()))
         p["revenue_months"] = [rs[0], rs[-1]] if rs else None
         p["usage_months"] = [us[0], us[-1]] if us else None
+        p["revenue_month_list"], p["usage_month_list"] = rs, us
+        p["available"] = dict(                                 # in words, for the start page
+            iprs=[_label(a, b) + (f" ({r})" if r else "") for a, b, r in sorted(
+                {(s["period_start"], s["period_end"], s["reference"] or s["filename"]) for s in p["iprs"]
+                 if s["period_start"] and s["period_end"]})],
+            revenue=_months_text(rs) if rs else None, usage=_months_text(us) if us else None)
         p["status"] = ("READY" if p["ready"] else "NO_REVENUE" if not rev else "NO_IPRS" if not p["iprs"]
                        else "YEAR_ONLY" if p["year_ready"] else "NO_OVERLAP")
     return dict(platforms=sorted(out.values(), key=lambda x: (not (x["ready"] or x["year_ready"]), x["platform"])),
@@ -1081,22 +1087,165 @@ def variance_pct(i: dict) -> Decimal | None:
     return (Decimal(bench) - Decimal(got)).quantize(Decimal("0.01"))
 
 
-def usage_rates(conn, run: dict, item_ids: list[int]) -> dict:
-    """item id -> (plays, revenue of the months with plays): the basis of 'revenue per usage'. The revenue is taken
-    for the months the usage reports cover only, so a period they cover in part is not divided by too few plays."""
-    months = sorted(_date(m) for m in ((run.get("source_snapshot") or {}).get("usage_months") or []))
-    rows = db.all(conn, "SELECT reconciliation_item_id AS item, sum(contribution_amount) FILTER (WHERE source_type = "
-                        "'PLATFORM_USAGE') AS plays, sum(contribution_amount) FILTER (WHERE source_type = ANY(%s) AND "
-                        "usage_month = ANY(%s)) AS revenue FROM reconciliation_sources WHERE reconciliation_item_id = "
-                        "ANY(%s) GROUP BY 1", (list(REVENUE_TYPES), months, item_ids))
-    return {r["item"]: (r["plays"], r["revenue"]) for r in rows}
+# ================================================================== the usage months (the Usage tab)
+def usage_months(run: dict) -> list[dt.date]:
+    """The run's months that the platform's usage reports cover (Jan - Mar 2026 of an Oct 2025 - Mar 2026 run): the
+    months of the Usage tab and of a query's attachment with usage. Runs before 1.5.0 (no platform reports): none."""
+    snap = run.get("source_snapshot") or {}
+    if "platform_reports" not in snap:
+        return []
+    cm = {_date(m) for m in (run.get("compared_months") or [])} \
+        or set(months_between(run["usage_period_start"], run["usage_period_end"]))
+    return sorted({_date(m) for m in (snap.get("usage_months") or [])} & cm)
 
 
-def usage_label(run: dict) -> str | None:
-    """'Jan 2026 - Mar 2026 only' when the usage reports cover only some of the run's months, else None."""
+def _span(ms) -> tuple[dt.date, dt.date]:
+    return min(ms), month_end(max(ms).year, max(ms).month)
+
+
+def usage_info(run: dict, blocks: list[dict]) -> dict | None:
+    """What the Usage tab compares: its months, and the IPRS statements that cover more months than that (IPRS pays
+    one amount for its whole period, so only a part of it counts - usage_view)."""
+    um = usage_months(run)
+    if not um:
+        return None
+    split = []
+    for b in blocks:
+        ms = set(months_between(b["period_start"], b["period_end"])) if b["period_start"] and b["period_end"] else set()
+        if b["side"] == "IPRS" and ms & set(um) and not ms <= set(um):
+            split.append(dict(reference=b["reference"], period=b["period_label"]))
     cm = {_date(m) for m in (run.get("compared_months") or [])}
-    um = {_date(m) for m in ((run.get("source_snapshot") or {}).get("usage_months") or [])}
-    return f"{_months_text(um & cm)} only" if um and cm - um else None
+    a, b = _span(um)
+    return dict(months=um, start=a, end=b, label=_months_text(um), all_months=set(um) >= cm, split=split,
+                split_text=split_text(split, _months_text(um), run.get("platform_name") or "the platform"))
+
+
+def split_text(split: list[dict], label: str, platform: str) -> str | None:
+    """How the IPRS amount for the usage months is worked out, in words."""
+    if not split:
+        return None
+    return ("IPRS paid one amount for " + ", ".join(f"{s['period']} ({s['reference']})" for s in split)
+            + f"; the part for {label} is that amount × the song's {platform} revenue in {label} ÷ its revenue in "
+              "the whole IPRS period.")
+
+
+def usage_view(conn, run: dict, items: list[dict], blocks: list[dict]) -> tuple[list[dict], list[dict], dict]:
+    """The Usage tab: the works with platform revenue in the usage months, every figure for those months only. The
+    platform revenue and plays are those of the months. An IPRS statement inside the months counts in full; one that
+    covers more months (IPRS pays one amount for Oct 2025 - Mar 2026) counts for the share of the song's revenue in
+    its period that falls in the usage months (Rs. 60 paid, half the song's Oct - Mar revenue earned in Jan - Mar ->
+    Rs. 30). Total revenue, expected, received % and variance follow as in compute(): the expected royalty and the
+    total revenue are those of the run in the proportion revenue in the months ÷ revenue in the run.
+    -> (items, blocks, values) in the shapes of items() / run_blocks() / block_values()."""
+    um = set(usage_months(run))
+    ub = []                                                # (block, its months in the run, its usage months)
+    for b in blocks:
+        if b["side"] == "CLIENT" or not b["period_start"] or not b["period_end"]:
+            continue
+        ms = set(months_between(b["period_start"], b["period_end"]))
+        inside = ms & um
+        if inside:
+            a, z = _span(inside)
+            ub.append((dict(b, period_start=a, period_end=z, period_label=_months_text(inside),
+                            usage_label="plays" if b["side"] == "PLATFORM" else b["usage_label"],
+                            split=b["side"] == "IPRS" and inside != ms, whole_period=b["period_label"]), ms, inside))
+    ids = [i["id"] for i in items]
+    by: dict = defaultdict(lambda: dict(rev={}, plays={}, iprs={}))
+    for r in db.all(conn, "SELECT reconciliation_item_id AS item, source_type, statement_id, usage_month, "
+                          "sum(contribution_amount) AS amount, count(*) AS lines FROM reconciliation_sources WHERE "
+                          "reconciliation_item_id = ANY(%s) GROUP BY 1, 2, 3, 4", (ids,)):
+        g = by[r["item"]]
+        if r["source_type"] in REVENUE_TYPES and r["usage_month"]:
+            g["rev"][(r["statement_id"], r["usage_month"])] = (r["amount"], r["lines"])
+        elif r["source_type"] == "PLATFORM_USAGE" and r["usage_month"] and r["amount"] is not None:
+            g["plays"][r["usage_month"]] = g["plays"].get(r["usage_month"], ZERO) + r["amount"]
+        elif r["source_type"] == "IPRS_ROYALTY":
+            g["iprs"][r["statement_id"]] = (r["amount"], r["lines"])
+
+    def total(xs):
+        xs = [x for x in xs if x is not None]
+        return sum(xs, ZERO) if xs else None
+
+    out, values = [], defaultdict(dict)
+    for it in items:
+        g = by.get(it["id"])
+        rev_u = total(a for (_s, m), (a, _n) in g["rev"].items() if m in um) if g else None
+        if rev_u is None:
+            continue
+        plays_u = total(p for m, p in g["plays"].items() if m in um)
+        parts, split = [], False
+        for b, ms, inside in ub:
+            if b["side"] == "PLATFORM":
+                got = [(a, n) for (s, m), (a, n) in g["rev"].items() if s == b["statement_id"] and m in inside]
+                use = total(p for m, p in g["plays"].items() if m in inside)
+                if got or use is not None:
+                    values[it["id"]][b["key"]] = dict(amount=total(a for a, _n in got), lines=sum(n for _a, n in got),
+                                                      usage=use)
+                continue
+            paid = g["iprs"].get(b["statement_id"])
+            if not paid or paid[0] is None:
+                continue
+            amount = paid[0]
+            if b["split"]:                                 # the song's share of the period's revenue in these months
+                split = True
+                whole = total(a for (_s, m), (a, _n) in g["rev"].items() if m in ms)
+                part = total(a for (_s, m), (a, _n) in g["rev"].items() if m in inside)
+                amount = _q(amount * (part or ZERO) / whole) if whole else None
+            parts.append(amount)
+            values[it["id"]][b["key"]] = dict(amount=amount, lines=paid[1], usage=None)
+        iprs_u = None if not parts or None in parts else sum(parts, ZERO)
+        full = it["sound_recording_revenue"]
+        k = rev_u / full if full else None
+        scale = (lambda v: _q(Decimal(v) * k) if v is not None and k is not None else None)     # noqa: E731
+        base, expected = scale(it["eligible_revenue_basis"]), scale(it["reference_benchmark_amount"])
+        out.append(dict(it, sound_recording_revenue=rev_u, eligible_revenue_basis=base,
+                        reference_benchmark_amount=expected, iprs_royalty_amount=iprs_u, usage_plays=plays_u,
+                        observed_percentage=_q(iprs_u / base * HUNDRED) if iprs_u is not None and base else None,
+                        indicative_variance=_q(expected - iprs_u) if expected is not None and iprs_u is not None
+                        else None, previous_revenue=None, previous_iprs_royalty=None, client_statement_amount=None,
+                        client_iprs_difference=None, iprs_split=split))
+    return out, [b for b, _ms, _i in ub], values
+
+
+USAGE_SORTS = {"revenue": ("sound_recording_revenue", True), "variance": ("indicative_variance", True),
+               "iprs": ("iprs_royalty_amount", True), "observed": ("observed_percentage", False)}
+
+
+def _usage_rows(conn, run: dict, f: dict, select: str = "i.*") -> tuple[list[dict], list[dict], dict]:
+    """The Usage tab's works for the filters, in the order chosen (as items() for the run's own months)."""
+    sql, p = _item_filter(run["id"], dict(f, kind="WORK", variance=None))
+    rows = db.all(conn, f"SELECT {select} FROM reconciliation_items i WHERE {sql} ORDER BY {SORTS['title']}, i.item_no",
+                  p)
+    its, blocks, values = usage_view(conn, run, rows, run_blocks(conn, run))
+    v = f.get("variance")
+    if v in ("positive", "underpaid"):
+        floor = ZERO if v == "positive" else TOLERANCE
+        its = [i for i in its if i["indicative_variance"] is not None and i["indicative_variance"] > floor]
+    elif v == "client_diff":
+        its = []
+    sort = f.get("sort") or "title"
+    if sort == "no":
+        its.sort(key=lambda i: i["item_no"])
+    elif sort in USAGE_SORTS:
+        k, desc = USAGE_SORTS[sort]
+        its.sort(key=lambda i: (i[k] is None, (-i[k] if desc else i[k]) if i[k] is not None else ZERO))
+    return its, blocks, values
+
+
+def usage_totals(its: list[dict], bench) -> dict:
+    """The Usage tab's figures for the works listed: revenue, total revenue, expected, received, received % (of the
+    total revenue of the works compared with IPRS), variance % and amount, plays."""
+    tot = lambda k, xs=its: sum((Decimal(x[k]) for x in xs if x[k] is not None), ZERO)      # noqa: E731
+    both = [i for i in its if i["iprs_royalty_amount"] is not None and i["eligible_revenue_basis"] is not None]
+    under = [i for i in its if i["indicative_variance"] is not None and i["indicative_variance"] > TOLERANCE]
+    got = (tot("iprs_royalty_amount", both) / tot("eligible_revenue_basis", both) * HUNDRED).quantize(Decimal("0.01")) \
+        if both and tot("eligible_revenue_basis", both) else None
+    return dict(songs=len(its), compared=len(both), revenue=tot("sound_recording_revenue"),
+                total=tot("eligible_revenue_basis"), expected=tot("reference_benchmark_amount"),
+                received=tot("iprs_royalty_amount"), received_pct=got,
+                variance_pct=(Decimal(bench) - got).quantize(Decimal("0.01")) if got is not None else None,
+                underpaid=len(under), shortfall=tot("indicative_variance", under),
+                plays=tot("usage_plays") if any(i["usage_plays"] is not None for i in its) else None)
 
 
 def _ratio(xs: list, part: str, whole: str):
@@ -1108,16 +1257,18 @@ def _ratio(xs: list, part: str, whole: str):
 
 def block_sheet(wb: Workbook, title: str, *, platform: str, client_code: str, benchmark, blocks: list[dict],
                 items: list[dict], values: dict, notes: list[str], status: dict | None = None, interest=None,
-                share=None, usage: dict | None = None) -> None:
+                share=None, usage: dict | None = None, brief: bool = False) -> None:
     """The song report (the reconciliation's Excel report and a query's attachment): Internal No · Song name · ISRC,
     then one section per kind with one block per statement - the platform (e.g. SPOTIFY): Amount · Period (period,
     usage) · Distribution number; IPRS ROYALTY: Amount · Date · Period · Distribution number; then the check: the
     revenue (the client's share, as the platform reported it), the expected royalty (IPRS % of the total revenue =
     revenue / client share), what was received from IPRS, the % of the total revenue received, the variance % (IPRS %
-    - received %, in percentage points) and the variance amount. status: optional extra columns per item (exceptions, review …). usage: {'rates': usage_rates(),
-    'label': usage_label()} adds Usage and Revenue per usage (total revenue / usage) at the end. Three heading rows;
+    - received %, in percentage points) and the variance amount. status: optional extra columns per item (exceptions, review …). usage: {'rates': {item id: (plays,
+    revenue)}, 'label': text or None} adds Usage and Revenue per usage (total revenue / usage) at the end. Three heading rows;
     they and Internal No, Song name and ISRC are frozen. share: the run's client share % (None before 1.6.0);
-    interest: the client interest % of a run before 1.6.0, if one was set."""
+    interest: the client interest % of a run before 1.6.0, if one was set. brief: the check without the expected value
+    and the variance amount (Client revenue · Received from IPRS · Received % · Variance %; the reconciliation's Excel
+    report and a query's attachment - only the attachment with usage has the full check)."""
     ws = wb.create_sheet(title[:31]) if wb.worksheets and wb.active.max_row > 1 else wb.active
     ws.title = title[:31]
     bench = Decimal(benchmark).normalize() if benchmark is not None else None
@@ -1164,25 +1315,26 @@ def block_sheet(wb: Workbook, title: str, *, platform: str, client_code: str, be
         sections.append((side, a, len(cols)))
     a = len(cols) + 1
     if share is not None and share != HUNDRED:
-        of = f"{bench} % of total revenue = revenue ÷ {share} %"
+        of = f"{bench} % of total revenue = client revenue ÷ {share} %"
     elif interest is not None:                             # a run before 1.6.0 with a client interest
         of = f"{bench} % of revenue × {Decimal(interest).normalize()} % client interest"
     else:
         of = f"{bench} % of revenue"
-    whole = "total revenue" if share is not None and share != HUNDRED else "revenue"
-    add("CHECK", "Revenue", 15, xlsx.MONEY, value=lambda i: i["sound_recording_revenue"], total="sum")
-    add("CHECK", f"Expected value ({of})" if bench is not None else "Expected value", 18, xlsx.MONEY,
-        value=lambda i: i["reference_benchmark_amount"], total="sum")
+    add("CHECK", "Client revenue", 15, xlsx.MONEY, value=lambda i: i["sound_recording_revenue"], total="sum")
+    if not brief:
+        add("CHECK", f"Expected value ({of})" if bench is not None else "Expected value", 18, xlsx.MONEY,
+            value=lambda i: i["reference_benchmark_amount"], total="sum")
     add("CHECK", "Received from IPRS", 14, xlsx.MONEY, value=lambda i: i["iprs_royalty_amount"], total="sum")
     def received(xs):                                      # Σ received / Σ total revenue of the works compared
         return _ratio([x for x in xs if x["indicative_variance"] is not None], "iprs_royalty_amount",
                       "eligible_revenue_basis")
-    add("CHECK", f"Received % of {whole}", 12, "0.00", value=lambda i: Decimal(i["observed_percentage"]).quantize(
+    add("CHECK", "Received %", 12, "0.00", value=lambda i: Decimal(i["observed_percentage"]).quantize(
         Decimal("0.01")) if i["observed_percentage"] is not None else None, total=received)
-    add("CHECK", f"Variance % ({bench} % - received %)" if bench is not None else "Variance %", 12, "0.00",
+    add("CHECK", "Variance %", 12, "0.00",
         value=variance_pct, total=lambda xs: (bench - received(xs)) if bench is not None and received(xs) is not None
         else None)
-    add("CHECK", "Variance amount", 14, xlsx.MONEY, value=lambda i: i["indicative_variance"], total="sum")
+    if not brief:
+        add("CHECK", "Variance amount", 14, xlsx.MONEY, value=lambda i: i["indicative_variance"], total="sum")
     sections.append(("CHECK", a, len(cols)))
     if status:
         a = len(cols) + 1
@@ -1281,19 +1433,23 @@ def block_sheet(wb: Workbook, title: str, *, platform: str, client_code: str, be
     ws.auto_filter.ref = f"A3:{get_column_letter(len(cols))}{max(first + len(items) - 1, 3)}"
 
 
-def check_note(benchmark, share, interest=None) -> str:
-    """How the check section is worked out, for the notes under a song report."""
+def check_note(benchmark, share, interest=None, brief: bool = False) -> str:
+    """How the check section is worked out, for the notes under a song report. brief: the check without the
+    expected value and the variance amount (block_sheet(brief=True))."""
     bench = Decimal(benchmark).normalize()
     share = Decimal(share).normalize() if share is not None else None
     if share is not None and share != HUNDRED:
-        return (f"Revenue = the revenue the platform reported, which is the client's {share} % share of the song's "
-                f"total revenue; total revenue = revenue ÷ {share} %. Expected value = {bench} % of the total revenue; "
-                f"Received % = received from IPRS ÷ total revenue; Variance % = {bench} % - received % (the difference in "
-                "percentage points); Variance amount = expected - received (positive: underpaid).")
-    return (f"Expected value = {bench} % of the revenue"
-            + (f" × {Decimal(interest).normalize()} % client interest" if interest is not None else "")
-            + f"; Received % = received from IPRS ÷ revenue; Variance % = {bench} % - received %; Variance amount = "
-              "expected - received (positive: underpaid).")
+        return (f"Client revenue = the revenue the platform reported, which is the client's {share} % share of the "
+                f"song's total revenue; total revenue = client revenue ÷ {share} %. "
+                + ("" if brief else f"Expected value = {bench} % of the total revenue; ")
+                + f"Received % = received from IPRS ÷ total revenue; Variance % = {bench} % - received % (the "
+                  "difference in percentage points"
+                + (", positive: underpaid)." if brief else "); Variance amount = expected - received (positive: "
+                                                           "underpaid)."))
+    return ("" if brief else f"Expected value = {bench} % of the client revenue"
+            + (f" × {Decimal(interest).normalize()} % client interest" if interest is not None else "") + "; ") \
+        + f"Received % = received from IPRS ÷ client revenue; Variance % = {bench} % - received %" \
+        + ("." if brief else "; Variance amount = expected - received (positive: underpaid).")
 
 
 def runs(actor: dict, client_id: int) -> list[dict]:
@@ -1302,17 +1458,45 @@ def runs(actor: dict, client_id: int) -> list[dict]:
                             "r.benchmark_percentage, r.client_interest_pct, r.summary, r.started_at, p.platform_name, "
                             "u.name AS started_by, (SELECT json_build_object('items', count(*), 'reviewed', count(*) "
                             "FILTER (WHERE i.review_status = 'REVIEWED'), 'needs_info', count(*) FILTER (WHERE "
-                            "i.review_status = 'NEEDS_INFO')) FROM reconciliation_items i WHERE i.reconciliation_run_id "
-                            "= r.id) AS review FROM reconciliation_runs r JOIN platforms p ON p.id = r.platform_id "
-                            "LEFT JOIN app_user u ON u.id = r.started_by WHERE r.client_id = %s ORDER BY r.id DESC "
-                            "LIMIT 50", (client_id,))
+                            "i.review_status = 'NEEDS_INFO'), 'by', (SELECT array_agg(DISTINCT x.name ORDER BY x.name) "
+                            "FROM reconciliation_items j JOIN app_user x ON x.id = j.reviewed_by WHERE "
+                            "j.reconciliation_run_id = r.id AND j.review_status <> 'UNREVIEWED')) FROM "
+                            "reconciliation_items i WHERE i.reconciliation_run_id = r.id) AS review, r.verified_at, "
+                            "v.name AS verified_by FROM reconciliation_runs r JOIN platforms p ON p.id = r.platform_id "
+                            "LEFT JOIN app_user u ON u.id = r.started_by LEFT JOIN app_user v ON v.id = r.verified_by "
+                            "WHERE r.client_id = %s ORDER BY r.id DESC LIMIT 50", (client_id,))
+
+
+def verify_run(actor: dict, run_id: int, note: str | None) -> dict:
+    """The second check: the person who ran a reconciliation is never the one who verifies it. Verified once; the
+    verification (who, when, note) is on the run, in its list and in the activity log. Its figures never change."""
+    access.require(actor, "prepare")
+    note = (note or "").strip() or None
+    with access.tx(actor) as conn:
+        r = db.one(conn, "SELECT r.*, u.name AS started_by_name, v.name AS verified_by_name FROM reconciliation_runs r "
+                         "LEFT JOIN app_user u ON u.id = r.started_by LEFT JOIN app_user v ON v.id = r.verified_by "
+                         "WHERE r.id = %s FOR UPDATE OF r", (run_id,))
+        if not r or r["status"] != "COMPLETED":
+            raise ReconError("Only a completed reconciliation can be verified.")
+        if r["verified_by"]:
+            raise ReconError(f"{r['verified_by_name']} already verified this reconciliation on "
+                             f"{r['verified_at']:%d %b %Y}.")
+        if r["started_by"] == actor["id"]:
+            raise ReconError(f"You ran this reconciliation, so a second person verifies it (not "
+                             f"{r['started_by_name']}).")
+        conn.execute("UPDATE reconciliation_runs SET verified_by = %s, verified_at = now(), verify_note = %s WHERE id = %s",
+                     (actor["id"], note, run_id))
+        audit.record(conn, "recon.run_verified", actor, "reconciliation_runs", run_id,
+                     dict(run=r["run_reference"], ran_by=r["started_by_name"], note=note))
+    return run_view(actor, run_id)
 
 
 def run_view(actor: dict, run_id: int) -> dict:
     with access.tx(actor) as conn:
-        r = db.one(conn, "SELECT r.*, p.platform_name, u.name AS started_by_name, c.code AS client_code, c.name AS "
-                         "client_name FROM reconciliation_runs r JOIN platforms p ON p.id = r.platform_id JOIN client c "
-                         "ON c.id = r.client_id LEFT JOIN app_user u ON u.id = r.started_by WHERE r.id = %s", (run_id,))
+        r = db.one(conn, "SELECT r.*, p.platform_name, u.name AS started_by_name, v.name AS verified_by_name, c.code AS "
+                         "client_code, c.name AS client_name FROM reconciliation_runs r JOIN platforms p ON p.id = "
+                         "r.platform_id JOIN client c ON c.id = r.client_id LEFT JOIN app_user u ON u.id = r.started_by "
+                         "LEFT JOIN app_user v ON v.id = r.verified_by WHERE r.id = %s", (run_id,))
         if not r:
             raise ReconError("This reconciliation does not exist, or you do not have access to it.")
         # per exception type, in items: still to review (open exception, item not reviewed), reviewed, closed
@@ -1326,8 +1510,11 @@ def run_view(actor: dict, run_id: int) -> dict:
         hit = db.scalar(conn, "SELECT count(*) FROM reconciliation_items WHERE reconciliation_run_id = %s AND "
                               "internal_work_number = ANY(%s)", (run_id, sorted(later)))
         reviewed = db.one(conn, "SELECT count(*) FILTER (WHERE review_status = 'REVIEWED') AS reviewed, count(*) FILTER "
-                                "(WHERE review_status = 'NEEDS_INFO') AS needs_info, count(*) AS items FROM "
-                                "reconciliation_items WHERE reconciliation_run_id = %s", (run_id,))
+                                "(WHERE review_status = 'NEEDS_INFO') AS needs_info, count(*) AS items, "
+                                "(SELECT array_agg(DISTINCT x.name ORDER BY x.name) FROM app_user x WHERE x.id IN (SELECT "
+                                "reviewed_by FROM reconciliation_items WHERE reconciliation_run_id = %(r)s AND "
+                                "review_status <> 'UNREVIEWED')) AS by FROM reconciliation_items WHERE "
+                                "reconciliation_run_id = %(r)s", dict(r=run_id))
         periods = period_columns(conn, run_id)
         blocks = run_blocks(conn, r)
     by_type = {e["exception_type"]: dict(open=e["todo"], reviewed=e["reviewed"], closed=e["closed"], items=e["items"])
@@ -1336,8 +1523,29 @@ def run_view(actor: dict, run_id: int) -> dict:
         by_type.items(), key=lambda kv: -kv[1]["items"])], later_statements=dict(
         statements=sorted({(s["id"], s["filename"]) for v in later.values() for s in v}), items=hit),
                 reviewed=reviewed, missing_text=MISSING_IPRS, periods=periods, blocks=blocks,
+                verification=dict(ran_by=r["started_by_name"], ran_at=r["started_at"], by=r["verified_by_name"],
+                                  at=r["verified_at"], note=r["verify_note"],
+                                  can_verify=r["status"] == "COMPLETED" and not r["verified_by"]
+                                  and r["started_by"] != actor["id"] and access.can(actor, "prepare")),
+                usage=usage_info(r, blocks), available=available(r, periods),
                 labels=dict(exceptions=EXC_LABEL, calc=CALC_LABEL, kinds=KIND_LABEL, review=REVIEW_LABEL,
                             mapping=MAPPING_LABEL, run_kind=RUN_KIND_LABEL))
+
+
+def available(run: dict, periods: dict) -> dict:
+    """What the run had, in words: the IPRS statements' periods, the months with platform revenue, the months with
+    platform usage (plays) - and so what the Works tab (revenue and IPRS) and the Usage tab compare."""
+    snap = run["source_snapshot"] or {}
+    iprs = []
+    for x in snap.get("iprs_statements") or []:
+        a, b = (x.get("period") or [None, None])[:2]
+        iprs.append(f"{_label(_date(a), _date(b))} ({x.get('reference') or x['file']})" if a and b
+                    else f"period not stated ({x.get('reference') or x['file']})")
+    rev = {_date(p["start"]) for p in periods.get("source") or []}
+    um = usage_months(run)
+    return dict(iprs=iprs, revenue=_months_text(rev) if rev else None, usage=_months_text(um) if um else None,
+                works=_months_text([_date(m) for m in (run.get("compared_months") or [])]) if run.get("compared_months")
+                else _label(run["usage_period_start"], run["usage_period_end"]))
 
 
 SORTS = {"revenue": "sound_recording_revenue DESC NULLS LAST", "variance": "indicative_variance DESC NULLS LAST",
@@ -1397,44 +1605,72 @@ def items(actor: dict, run_id: int, f: dict, offset: int = 0, limit: int = 100) 
         if not run:
             raise ReconError("This reconciliation does not exist.")
         sql, p = _item_filter(run_id, f)
-        p.update(o=max(0, offset), n=max(1, min(500, limit)))
-        rows = db.all(conn, f"SELECT i.*, coalesce((SELECT array_agg(DISTINCT e.exception_type) FROM "
-                            f"reconciliation_exceptions e WHERE e.reconciliation_item_id = i.id AND e.status IN ('OPEN', "
-                            f"'IN_REVIEW')), '{{}}') AS open_exceptions FROM reconciliation_items i WHERE {sql} "
-                            f"ORDER BY {SORTS.get(f.get('sort') or 'title', SORTS['title'])}, i.item_no OFFSET %(o)s LIMIT %(n)s",
-                      p)
-        total = db.scalar(conn, f"SELECT count(*) FROM reconciliation_items i WHERE {sql}", p)
+        o, n = max(0, offset), max(1, min(500, limit))
+        p.update(o=o, n=n)
+        cols = ("i.*, coalesce((SELECT array_agg(DISTINCT e.exception_type) FROM reconciliation_exceptions e WHERE "
+                "e.reconciliation_item_id = i.id AND e.status IN ('OPEN', 'IN_REVIEW')), '{}') AS open_exceptions")
+        extra = {}
+        if f.get("view") == "usage":                       # the Usage tab: the usage months only
+            its, ub, bvals = _usage_rows(conn, run, f, cols)
+            rows, total = its[o:o + n], len(its)
+            amounts = {}
+            extra = dict(blocks=ub, usage=usage_totals(its, run["benchmark_percentage"]))
+        else:
+            rows = db.all(conn, f"SELECT {cols} FROM reconciliation_items i "
+                                f"WHERE {sql} ORDER BY {SORTS.get(f.get('sort') or 'title', SORTS['title'])}, i.item_no "
+                                f"OFFSET %(o)s LIMIT %(n)s", p)
+            total = db.scalar(conn, f"SELECT count(*) FROM reconciliation_items i WHERE {sql}", p)
+            amounts = period_amounts(conn, [r["id"] for r in rows])
+            bvals = block_values(conn, [r["id"] for r in rows], run_blocks(conn, run))
         later = _later(conn, run)
         enq = _enquiry_status(conn, run["client_id"], [(r["work_id"], r["platform_id"]) for r in rows])
-        amounts = period_amounts(conn, [r["id"] for r in rows])
-        bvals = block_values(conn, [r["id"] for r in rows], run_blocks(conn, run))
+        held = held_back(conn, run["client_id"], rows)
+        people = {x["id"]: x["name"] for x in db.all(conn, "SELECT id, name FROM app_user WHERE id = ANY(%s)",
+                                                     ([r["reviewed_by"] for r in rows if r["reviewed_by"]],))}
     for r in rows:
+        r["held"] = held.get(r["id"])                      # not properly matched now: stays out of a query
+        r["reviewed_by_name"] = people.get(r["reviewed_by"])
         r["periods"] = amounts.get(r["id"], dict(source={}, iprs={}))
         r["blocks"] = bvals.get(r["id"], {})
         r["variance_pct"] = variance_pct(r)
         r["later_statements"] = later.get(r["internal_work_number"] or "", [])
         e = enq.get((r["work_id"], r["platform_id"]))
         r["enquiry"] = dict(id=e["id"], reference=e["enquiry_reference"], status=e["status"]) if e else None
-    return dict(rows=rows, total=total, offset=offset)
+    return dict(rows=rows, total=total, offset=offset, **extra)
 
 
-def why_not_query(it: dict) -> str | None:
-    """Why an item cannot go into a query to IPRS (an enquiry), or None: a work in the catalogue that IPRS underpaid
-    against the indicative reference, paid less than the client's statement shows, or did not list at all."""
+HELD_LINK = "its ISRC link is not verified yet (Catalogue)"
+HELD_WORK = "the work needs review in the Catalogue"
+
+
+def held_back(conn, client_id: int, items: list[dict]) -> dict[int, str]:
+    """The works of the Works tab that are not properly matched now (1.7.1), item id -> why: an ISRC behind the work's
+    revenue whose catalogue link is not verified, or a work that needs review (or registration) in the Catalogue.
+    Judged on the catalogue as it is now, not as it was when the run was made. They stay out of queries to IPRS until
+    the Catalogue is checked."""
+    ws = [i for i in items if i["item_kind"] == "WORK"]
+    if not ws:
+        return {}
+    out = {r["id"]: HELD_LINK for r in db.all(
+        conn, "SELECT DISTINCT s.reconciliation_item_id AS id FROM reconciliation_sources s LEFT JOIN isrc_resolution x "
+              "ON x.client_id = %s AND x.isrc = s.isrc WHERE s.reconciliation_item_id = ANY(%s) AND s.source_type IN "
+              "('CLIENT_REVENUE', 'PLATFORM_REVENUE', 'PLATFORM_USAGE') AND s.isrc IS NOT NULL AND x.mapping_status IS "
+              "DISTINCT FROM 'VERIFIED'", (client_id, [i["id"] for i in ws]))}
+    review = {r["id"] for r in db.all(conn, "SELECT id FROM works WHERE id = ANY(%s) AND catalogue_status IN ('REVIEW', "
+                                            "'TO_REGISTER')", ([i["work_id"] for i in ws],))}
+    for i in ws:
+        if i["work_id"] in review:
+            out.setdefault(i["id"], HELD_WORK)
+    return out
+
+
+def why_not_query(it: dict, held: str | None = None) -> str | None:
+    """Why an item cannot go into a query to IPRS (an enquiry), or None. 1.7.1: every work of the Works tab that is
+    properly matched goes - underpaid, missing at IPRS, paid in full or without platform revenue alike; unmatched
+    recordings and works not in the catalogue never go. held: why the work is not properly matched now (held_back)."""
     if it["item_kind"] != "WORK":
         return "only works in the catalogue can be enquired about (link or add the work first)"
-    checks = it.get("data_validation_status") or ""
-    if "NOT_COMPARABLE" in checks or "NO_IPRS_STATEMENT" in checks:
-        return "the statements are not comparable for this period"
-    if it["iprs_royalty_amount"] is None:
-        if it["sound_recording_revenue"] is None and it.get("client_statement_amount") is None:
-            return "there is no platform revenue or client statement for this work in the period"
-        return None
-    if it["indicative_variance"] is not None and it["indicative_variance"] > TOLERANCE:
-        return None
-    if it.get("client_iprs_difference") is not None and it["client_iprs_difference"] > TOLERANCE:
-        return None
-    return "IPRS paid at or above the indicative reference and the client's statement"
+    return held
 
 
 def item_ids(actor: dict, run_id: int, f: dict) -> dict:
@@ -1445,13 +1681,19 @@ def item_ids(actor: dict, run_id: int, f: dict) -> dict:
         if not run:
             raise ReconError("This reconciliation does not exist.")
         sql, p = _item_filter(run_id, f)
-        rows = db.all(conn, f"SELECT i.id, i.item_kind, i.work_id, i.platform_id, i.sound_recording_revenue, "
-                            f"i.calculation_status, i.iprs_royalty_amount, i.indicative_variance, "
-                            f"i.client_statement_amount, i.client_iprs_difference, i.data_validation_status FROM "
-                            f"reconciliation_items i WHERE {sql} ORDER BY i.item_no", p)
+        if f.get("view") == "usage":                       # the Usage tab: judged on the usage months' figures
+            rows = _usage_rows(conn, run, dict(f, sort="no"))[0]
+        else:
+            rows = db.all(conn, f"SELECT i.id, i.item_kind, i.work_id, i.platform_id FROM reconciliation_items i "
+                                f"WHERE {sql} ORDER BY i.item_no", p)
         enq = _enquiry_status(conn, run["client_id"], [(r["work_id"], r["platform_id"]) for r in rows])
-    elig = [r["id"] for r in rows if why_not_query(r) is None and (r["work_id"], r["platform_id"]) not in enq]
-    return dict(ids=[r["id"] for r in rows], eligible=elig, total=len(rows))
+        held = held_back(conn, run["client_id"], rows)
+    free = [r for r in rows if (r["work_id"], r["platform_id"]) not in enq]
+    elig = [r["id"] for r in free if why_not_query(r, held.get(r["id"])) is None]
+    # works left out of a query: not properly matched now (and not already in an enquiry)
+    return dict(ids=[r["id"] for r in rows], eligible=elig, total=len(rows),
+                held=sum(1 for r in free if r["id"] in held),
+                enquired=sum(1 for r in rows if r["item_kind"] == "WORK" and (r["work_id"], r["platform_id"]) in enq))
 
 
 def item_detail(actor: dict, item_id: int) -> dict:
@@ -1536,8 +1778,10 @@ def review_items(actor: dict, run_id: int, item_ids: list, status: str, note: st
         before: dict = defaultdict(int)
         for r in rows:
             before[r["review_status"]] += 1
+        ref = db.scalar(conn, "SELECT run_reference FROM reconciliation_runs WHERE id = %s", (run_id,))
         audit.record(conn, "recon.items_reviewed", actor, "reconciliation_runs", run_id,
-                     dict(items=len(ids), item_ids=ids[:200], note=note), before=dict(before),
+                     dict(run=ref, items=len(ids), status=REVIEW_LABEL[status], item_ids=ids[:200], note=note),
+                     before=dict(before),
                      after=dict(review_status=status))
     return dict(updated=len(ids), status=status, label=REVIEW_LABEL[status])
 
@@ -1602,7 +1846,17 @@ def update_exception(actor: dict, exception_id: int, body: dict) -> dict:
                         resolution_note=note or e["resolution_note"])
         if "assigned_to" in body:
             access.require(actor, "assign_followups")
-            vals["assigned_to"] = int(body["assigned_to"]) if body.get("assigned_to") else None
+            vals["assigned_to"] = access.assignee(conn, body.get("assigned_to"))
+            if vals["assigned_to"] != e["assigned_to"]:
+                it = db.one(conn, "SELECT i.work_title, i.internal_work_number, r.run_reference FROM reconciliation_items i "
+                                  "JOIN reconciliation_runs r ON r.id = i.reconciliation_run_id WHERE i.id = %s",
+                            (e["reconciliation_item_id"],))
+                notify.send(conn, actor, vals["assigned_to"], e["client_id"], "EXCEPTION_ASSIGNED",
+                            f"To review: {EXC_LABEL.get(e['exception_type'], e['exception_type'])}",
+                            f"{actor['name']} assigned you an exception in {it['run_reference']}"
+                            + (f" for {it['work_title']}" if it["work_title"] else "")
+                            + (f" ({it['internal_work_number']})" if it["internal_work_number"] else "") + ".",
+                            f"reconciliation/{e['reconciliation_run_id']}")
         if vals:
             db.update(conn, "reconciliation_exceptions", exception_id, vals)
             conn.execute("UPDATE reconciliation_exceptions SET updated_at = now() WHERE id = %s", (exception_id,))
@@ -1745,8 +1999,16 @@ def report(actor: dict, run_id: int, f: dict) -> tuple[str, bytes]:
         if not r:
             raise ReconError("This reconciliation does not exist.")
         sql, p = _item_filter(run_id, f)
-        its = db.all(conn, f"SELECT i.* FROM reconciliation_items i WHERE {sql} ORDER BY "        # as on screen; A → Z
-                           f"{SORTS.get(f.get('sort') or 'title', SORTS['title'])}, i.item_no", p)
+        blocks = run_blocks(conn, r)
+        uinfo = usage_info(r, blocks) if f.get("view") == "usage" else None
+        if f.get("view") == "usage" and not uinfo:
+            raise ReconError("This reconciliation has no usage report for its months, so it has no Usage tab.")
+        if uinfo:                                          # the Usage tab: the usage months only, as on screen
+            its, blocks, bvals = _usage_rows(conn, r, f)
+        else:
+            its = db.all(conn, f"SELECT i.* FROM reconciliation_items i WHERE {sql} ORDER BY "    # as on screen; A → Z
+                               f"{SORTS.get(f.get('sort') or 'title', SORTS['title'])}, i.item_no", p)
+            bvals = block_values(conn, [i["id"] for i in its], blocks)
         ids = [i["id"] for i in its]
         excs = db.all(conn, "SELECT * FROM reconciliation_exceptions WHERE reconciliation_item_id = ANY(%s) ORDER BY "
                             "reconciliation_item_id, id", (ids,))
@@ -1758,6 +2020,10 @@ def report(actor: dict, run_id: int, f: dict) -> tuple[str, bytes]:
         people = {x["id"]: x["name"] for x in db.all(conn, "SELECT id, name FROM app_user")}
         audit.record(conn, "export.reconciliation_report", actor, "reconciliation_runs", run_id,
                      dict(reference=r["run_reference"], items=len(its), filters={k: v for k, v in f.items() if v}))
+    if uinfo:                                              # revenue and plays of the usage months only
+        um = set(uinfo["months"])
+        srcs = [x for x in srcs if x["source_type"] not in REVENUE_TYPES + ("PLATFORM_USAGE",)
+                or _date(x["usage_month"]) in um]
     by_id = {i["id"]: i for i in its}
     ex_by: dict = defaultdict(list)
     for e in excs:
@@ -1785,10 +2051,9 @@ def report(actor: dict, run_id: int, f: dict) -> tuple[str, bytes]:
                        for k, v in sorted(rows.items()))
         return "; ".join(stm), rr
 
-    with access.tx(actor) as conn:
-        blocks = run_blocks(conn, r)
-        bvals = block_values(conn, ids, blocks)
-    head = [f"{r['client_name']} - {r['platform_name']} reconciliation {r['run_reference']} ({period})",
+    head = [f"{r['client_name']} - {r['platform_name']} reconciliation {r['run_reference']} ({period})"
+            + (f" - Usage tab: {uinfo['label']}, the months with {r['platform_name']} usage; every figure is for "
+               "these months." if uinfo else ""),
             f"Run by {r['started_by_name']} on {r['started_at']:%d %b %Y %H:%M}. IPRS % "
             f"{r['benchmark_percentage'].normalize()} %"
             + (f"; client share {r['client_share_pct'].normalize()} %" if r["client_share_pct"] is not None else
@@ -1796,10 +2061,13 @@ def report(actor: dict, run_id: int, f: dict) -> tuple[str, bytes]:
             + f"; revenue basis {r['revenue_basis'].lower()}.",
             "Per platform report: Amount, Period (the period and the plays the platform reported for the song in it) "
             "and Distribution number; per IPRS statement: Amount, Date, Period and Distribution number.",
-            check_note(r["benchmark_percentage"], r["client_share_pct"], r["client_interest_pct"])
+            check_note(r["benchmark_percentage"], r["client_share_pct"], r["client_interest_pct"], brief=True)
             + " Indicative only, not amounts payable by IPRS. An empty cell means no record - never zero."]
-    if any(v for k, v in f.items() if k != "sort"):
-        head.append("Filters: " + ", ".join(f"{k} = {v}" for k, v in f.items() if v and k != "sort"))
+    if uinfo and uinfo["split_text"]:
+        head.append(uinfo["split_text"])
+    shown = {k: v for k, v in f.items() if v and k not in ("sort", "view") and not (uinfo and k == "kind")}
+    if shown:
+        head.append("Filters: " + ", ".join(f"{k} = {v}" for k, v in shown.items()))
     plat = r["platform_name"]
 
     def later_text(i):
@@ -1818,7 +2086,7 @@ def report(actor: dict, run_id: int, f: dict) -> tuple[str, bytes]:
         "Review status": (14, lambda i: REVIEW_LABEL[i["review_status"]]),
         "Reviewed by": (16, lambda i: people.get(i["reviewed_by"])), "Review note": (30, lambda i: i["review_note"]),
         "Source rows": (50, lambda i: refs(i)[1] or None)}
-    if yearly:
+    if yearly and not uinfo:
         status_cols = {f"Revenue, year before ({prev_label or 'no statements'})": (16, lambda i: i["previous_revenue"]),
                        "Revenue change %": (10, lambda i: _q2(change(i["sound_recording_revenue"], i["previous_revenue"]))),
                        "IPRS paid, year before": (16, lambda i: i["previous_iprs_royalty"]),
@@ -1852,14 +2120,26 @@ def report(actor: dict, run_id: int, f: dict) -> tuple[str, bytes]:
                      if s.get("iprs_unmatched") else None],
                     ["[Calculated] Total revenue (100 %) of the calculated works", Decimal(s["eligible"])
                      if s.get("eligible") else None],
-                    ["[Calculated] Expected royalty (calculated works)", Decimal(s["reference"])
-                     if s.get("reference") else None],
                     *_pct_rows(s, r["benchmark_percentage"]),
                     ["Works underpaid by IPRS", s.get("underpaid")],
-                    ["[Calculated] Total shortfall of the underpaid works", Decimal(s["shortfall"])
-                     if s.get("shortfall") else None],
                     ["[Source] Usage (plays) on catalogue works", Decimal(s["usage"]) if s.get("usage") else None],
                     ["Source snapshot sha256", r["source_snapshot_sha256"]]]
+    if uinfo:                                              # the Usage tab's own figures, not the run's
+        u = usage_totals(its, r["benchmark_percentage"])
+        keep = {"Client", "Reference", "Platform", "Compares", "Usage period", "Months compared", "Territory",
+                "Currency", "IPRS % (of the total revenue)",
+                "Client share % (of the total revenue, as the platform pays it)", "Revenue basis"}
+        summary_rows = [x for x in summary_rows if x[0] in keep] + [
+            ["Usage tab: months compared", f"{uinfo['label']} (the months with {r['platform_name']} usage)"],
+            *([["IPRS amount for these months", uinfo["split_text"]]] if uinfo["split_text"] else []),
+            ["Works with revenue in these months", u["songs"]], ["Works compared with IPRS", u["compared"]],
+            ["[Platform] Client revenue", u["revenue"]],
+            ["[Calculated] Total revenue (100 %)", u["total"] if r["client_share_pct"] is not None else None],
+            ["[IPRS] Received from IPRS", u["received"]],
+            ["[Calculated] Received % of the total revenue (works compared)", u["received_pct"]],
+            [f"[Calculated] Variance % ({r['benchmark_percentage'].normalize()} % - received %)", u["variance_pct"]],
+            ["Works underpaid by IPRS", u["underpaid"]], ["[Platform] Usage (plays)", u["plays"]],
+            ["Source snapshot sha256", r["source_snapshot_sha256"]]]
     summary_rows += [["Note", n] for n in r["notes"]]
     snap = r["source_snapshot"]
     first = (("platform_reports", "Platform report"), ("client_statements", "Client statement")) \
@@ -1872,7 +2152,7 @@ def report(actor: dict, run_id: int, f: dict) -> tuple[str, bytes]:
     wb = Workbook()
     block_sheet(wb, "Reconciliation", platform=plat, client_code=r["code"], benchmark=r["benchmark_percentage"],
                 blocks=blocks, items=its, values=bvals, notes=head, status=status_cols,
-                interest=r["client_interest_pct"], share=r["client_share_pct"])
+                interest=r["client_interest_pct"], share=r["client_share_pct"], brief=True)
     other = [
         dict(title="Summary", heading=head, columns=[("", 44, None), ("", 90, None)], rows=summary_rows),
         dict(title="Exceptions", heading=head, columns=[("Item", 6, None), ("Work number", 12, None),
@@ -1904,6 +2184,8 @@ def report(actor: dict, run_id: int, f: dict) -> tuple[str, bytes]:
     data = excel.stable(wb)
     span = f"FY{r['usage_period_start'].year}-{str(r['usage_period_start'].year + 1)[2:]}" if yearly else \
         f"{r['usage_period_start']:%Y-%m}_to_{r['usage_period_end']:%Y-%m}"
+    if uinfo:
+        span = f"usage_{uinfo['start']:%Y-%m}_to_{uinfo['end']:%Y-%m}"
     name = f"{r['code']}_Reconciliation_{xlsx.safe_name(r['platform_name'])}_{span}_{r['run_reference']}.xlsx"
     return name, data
 

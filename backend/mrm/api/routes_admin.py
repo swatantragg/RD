@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, Depends
 
 from .. import db, maintenance, people
 from ..rd import access, platforms
-from .deps import J, actor
+from .deps import J, actor, json_body, json_body_opt
 
 router = APIRouter()
 
@@ -18,12 +18,12 @@ def list_people(include_deleted: bool = False, a: dict = Depends(actor)):
 
 
 @router.post("/people")
-def add_person(body: dict = Body(...), a: dict = Depends(actor)):
+def add_person(body: dict = Depends(json_body), a: dict = Depends(actor)):
     return J(people.create_person(a, body))
 
 
 @router.patch("/people/{uid}")
-def update_person(uid: int, body: dict = Body(...), a: dict = Depends(actor)):
+def update_person(uid: int, body: dict = Depends(json_body), a: dict = Depends(actor)):
     return J(people.update_person(a, uid, body))
 
 
@@ -33,7 +33,7 @@ def delete_person(uid: int, a: dict = Depends(actor)):
 
 
 @router.post("/people/{uid}/reset-password")
-def reset_password(uid: int, body: dict = Body(default={}), a: dict = Depends(actor)):
+def reset_password(uid: int, body: dict = Depends(json_body_opt), a: dict = Depends(actor)):
     return J(people.reset_password(a, uid, body))
 
 
@@ -66,7 +66,7 @@ def clear_statements_preview(cid: int, a: dict = Depends(actor)):
 
 
 @router.post("/clients/{cid}/clear-statements")
-def clear_statements(cid: int, body: dict = Body(...), a: dict = Depends(actor)):
+def clear_statements(cid: int, body: dict = Depends(json_body), a: dict = Depends(actor)):
     """Super Admin only: delete every statement of the client, with its reconciliations, enquiries and processing
     runs, to start fresh. The catalogue, settings, platforms, people and the activity log are kept."""
     c = _clear_client(a, cid)
@@ -86,7 +86,7 @@ def clear_catalogue_preview(cid: int, a: dict = Depends(actor)):
 
 
 @router.post("/clients/{cid}/clear-catalogue")
-def clear_catalogue(cid: int, body: dict = Body(...), a: dict = Depends(actor)):
+def clear_catalogue(cid: int, body: dict = Depends(json_body), a: dict = Depends(actor)):
     """Super Admin only: delete the client's catalogue (works, ISRC links, imports, song lists) with the
     reconciliations and enquiries built on it, to start fresh. Statements and reports are kept."""
     c = _clear_client(a, cid, "clear_catalogue")
@@ -108,10 +108,10 @@ def list_platforms(a: dict = Depends(actor)):
 
 
 @router.post("/platforms")
-def add_platform(body: dict = Body(...), a: dict = Depends(actor)):
+def add_platform(body: dict = Depends(json_body), a: dict = Depends(actor)):
     return J(platforms.add_platform(a, body))
 
 
 @router.post("/platforms/{pid}/aliases")
-def add_alias(pid: int, body: dict = Body(...), a: dict = Depends(actor)):
+def add_alias(pid: int, body: dict = Depends(json_body), a: dict = Depends(actor)):
     return J(platforms.add_alias(a, pid, body.get("alias") or ""))

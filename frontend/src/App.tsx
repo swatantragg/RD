@@ -7,6 +7,7 @@ import { ThemeToggle } from "./theme";
 import { ProfileMenu } from "./ProfileMenu";
 import { VersionButton, WhatsNew } from "./WhatsNew";
 import { Logo } from "./Logo";
+import { Notifications } from "./Notifications";
 import Home from "./pages/Home";
 import Clients from "./pages/Clients";
 import Settings from "./pages/Settings";
@@ -63,6 +64,7 @@ function Shell() {
       <main id="main" className="main">{body}</main>
       <Footer signedIn />
       <WhatsNew notes={me.whats_new} />
+      <Notifications />
     </div>
   );
 }

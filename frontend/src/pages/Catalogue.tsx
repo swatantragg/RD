@@ -15,6 +15,15 @@ type Works = { rows: WorkRow[]; total: number; offset: number;
 
 const WORK_TONE: Record<string, Tone> = { ACTIVE: "good", TO_REGISTER: "warn", REVIEW: "warn", INACTIVE: "neutral" };
 
+/** One line per tab: what it is for. */
+const TAB_NOTE: Record<string, string> = {
+  works: "The client's song list: each IPRS work with its ISRCs. Every Tuesday a mail goes to Durga for the updated catalogue.",
+  conflicts: "ISRCs claimed by more than one work. Shared with Durga every Tuesday to resolve the conflicts in the freshly updated data.",
+  import: "Import the updated catalogue Durga sends, with her corrections to the unmatched recordings and the works not in the catalogue; note how it came (mail or WhatsApp).",
+  history: "Every catalogue file imported: when, by whom and how it was received.",
+};
+const VIA = [{ value: "EMAIL", label: "By mail" }, { value: "WHATSAPP", label: "On WhatsApp" }, { value: "OTHER", label: "Other" }];
+
 export default function Catalogue({ tab, id }: { tab?: string; id?: number }) {
   const { go, me } = useApp();
   const [clearing, setClearing] = useState(false);
@@ -22,7 +31,7 @@ export default function Catalogue({ tab, id }: { tab?: string; id?: number }) {
   const cur = tabs.find((t) => t[0] === tab)?.[0] ?? "works";
   return (
     <NeedClient>{(cid) => (
-      <Page title="Catalogue"
+      <Page title="Catalogue" intro={TAB_NOTE[cur]}
             actions={<><CatalogueExport cid={cid} />{me.can.clear_catalogue && <Button kind="danger" onClick={() => setClearing(true)}>Delete catalogue</Button>}</>}>
         {clearing && <ClearDialog cid={cid} kind="catalogue" onClose={() => setClearing(false)} onDone={() => go("catalogue/works")} />}
         <div className="tabs" role="tablist">
@@ -451,7 +460,7 @@ function KeepDialog({ c, linkId, onClose, onDone }: { c: Conflict; linkId: numbe
 // ================================================================== import
 type ImportView = {
   id: number; filename: string; status: string; sheet: string; header_row: number; uploaded_by: string; uploaded_at: string;
-  reviewed_by: string | null; applied_at: string | null; stale: boolean; note: string | null; total: number; offset: number;
+  reviewed_by: string | null; applied_at: string | null; received_via: string | null; received_from: string | null; stale: boolean; note: string | null; total: number; offset: number;
   counts: { total_rows: number; new_works: number; new_recordings: number; new_mappings: number; existing_mappings: number;
     conflicts: number; conflict_links: number; duplicate_rows: number; invalid_rows: number; warning_rows: number; by_action: Record<string, number> };
   rows: { row: number; title: string; work: string | null; isrcs: string[]; invalid: string[]; action: string; action_label: string;
@@ -500,12 +509,14 @@ function ImportStart({ cid }: { cid: number }) {
 }
 
 function ImportPreview({ importId }: { importId: number }) {
-  const { go, toast } = useApp();
+  const { me, go, toast } = useApp();
   const qc = useQueryClient();
   const [status, setStatus] = useState("");
   const [q, setQ] = useState("");
   const [offset, setOffset] = useState(0);
   const [verify, setVerify] = useState(true);
+  const [via, setVia] = useState("");
+  const [from, setFrom] = useState("");
   const [busy, setBusy] = useState("");
   const [result, setResult] = useState<ImportView | null>(null);
   const v = useQuery({ queryKey: ["import", importId, status, q, offset],
@@ -549,7 +560,7 @@ function ImportPreview({ importId }: { importId: number }) {
             actions={<Pill tone={applied ? "good" : d.status === "PREVIEW" ? "info" : "neutral"}>{applied ? "Applied" : d.status === "PREVIEW" ? "Preview - not applied yet" : d.status.toLowerCase()}</Pill>}>
         {d.note && <Notice>{d.note}</Notice>}
         {d.stale && <Notice tone="warn">The catalogue changed after this preview was made. Applying will refresh the preview first.</Notice>}
-        {(result?.applied || applied) && <Notice tone="good">Applied{d.reviewed_by ? ` by ${d.reviewed_by}` : ""}{d.applied_at ? ` on ${when(d.applied_at)}` : ""}.
+        {(result?.applied || applied) && <Notice tone="good">Applied{d.reviewed_by ? ` by ${d.reviewed_by}` : ""}{d.applied_at ? ` on ${when(d.applied_at)}` : ""}{d.received_via ? ` · received ${d.received_via === "Other" ? "another way" : `by ${d.received_via}`}${d.received_from ? ` from ${d.received_from}` : ""}` : ""}.
           {result?.applied && <> {int(result.applied.works_created)} works and {int(result.applied.links_created)} links added; {int(result.applied.conflicts)} ISRCs recorded as conflicts
             {result.applied.older_links_flagged ? `; ${result.applied.older_links_flagged} older links flagged as conflicts` : ""}.</>}</Notice>}
         <div className="tiles">
@@ -560,9 +571,14 @@ function ImportPreview({ importId }: { importId: number }) {
         </div>
         <div className="actions">
           {d.status === "PREVIEW" && <>
-            <label className="check"><input type="checkbox" checked={verify} onChange={(e) => setVerify(e.target.checked)} /> Mark clean links from this catalogue as verified (the client's catalogue is the evidence)</label>
+            {me.can.verify_mappings
+              ? <label className="check"><input type="checkbox" checked={verify} onChange={(e) => setVerify(e.target.checked)} /> Mark clean links from this catalogue as verified (the client's catalogue is the evidence)</label>
+              : <span className="muted small">New links stay "pending" until an Admin verifies them.</span>}
             <span className="spacer" />
-            <Button kind="primary" busy={busy === "apply"} onClick={() => run("apply", () => api.post(`/catalogue/imports/${importId}/apply`, { verify_mappings: verify }), "Applied.")}>
+            <Select size="sm" label="Received" value={via} placeholder="How was it received?" onChange={setVia} options={VIA} />
+            <input className="input sm" placeholder="From (e.g. Durga)" value={from} onChange={(e) => setFrom(e.target.value)} />
+            <Button kind="primary" busy={busy === "apply"} disabled={!via} title={via ? undefined : "Say how the catalogue was received first"}
+                    onClick={() => run("apply", () => api.post(`/catalogue/imports/${importId}/apply`, { verify_mappings: verify && me.can.verify_mappings, received_via: via, received_from: from }), "Applied.")}>
               Apply {int(c.total_rows - c.invalid_rows - c.duplicate_rows)} rows</Button>
             <Button kind="ghost" busy={busy === "discard"} onClick={() => run("discard", () => api.post(`/catalogue/imports/${importId}/discard`), "Preview discarded.")}>Discard</Button>
           </>}
@@ -598,13 +614,14 @@ function ImportPreview({ importId }: { importId: number }) {
 function History({ cid }: { cid: number }) {
   const { go } = useApp();
   const q = useQuery({ queryKey: ["imports", cid], queryFn: () => api.get<{ id: number; filename: string; status: string; uploaded_at: string; applied_at: string | null;
-    total_rows: number; new_works_count: number; new_mappings_count: number; conflict_count: number; invalid_rows_count: number; uploaded_by: string }[]>(`/catalogue/imports${qs({ client_id: cid })}`) });
+    total_rows: number; new_works_count: number; new_mappings_count: number; conflict_count: number; invalid_rows_count: number; uploaded_by: string;
+    received_via: string | null; received_from: string | null }[]>(`/catalogue/imports${qs({ client_id: cid })}`) });
   if (!q.data) return <Loading />;
   return (
     <Card title="Catalogue imports">
       {q.data.length === 0 ? <Empty title="No imports yet" /> : (
         <div className="tbl-wrap"><table className="tbl">
-          <thead><tr><th>#</th><th>File</th><th>Status</th><th className="num">Rows</th><th className="num">New works</th><th className="num">New links</th><th className="num">Conflicts</th><th className="num">Invalid</th><th>Uploaded</th></tr></thead>
+          <thead><tr><th>#</th><th>File</th><th>Status</th><th className="num">Rows</th><th className="num">New works</th><th className="num">New links</th><th className="num">Conflicts</th><th className="num">Invalid</th><th>Uploaded</th><th>Imported</th><th>Received</th></tr></thead>
           <tbody>{q.data.map((i) => (
             <tr key={i.id} className="click" onClick={() => go(`catalogue/import/${i.id}`)}>
               <td>{i.id}</td><td>{i.filename}</td>
@@ -612,6 +629,8 @@ function History({ cid }: { cid: number }) {
               <td className="num">{int(i.total_rows)}</td><td className="num">{int(i.new_works_count)}</td><td className="num">{int(i.new_mappings_count)}</td>
               <td className="num">{int(i.conflict_count)}</td><td className="num">{int(i.invalid_rows_count)}</td>
               <td className="small">{when(i.uploaded_at)} · {i.uploaded_by}</td>
+              <td className="small nowrap">{i.applied_at ? when(i.applied_at) : <span className="muted">—</span>}</td>
+              <td className="small">{i.received_via ? `${VIA.find((x) => x.value === i.received_via)?.label}${i.received_from ? ` · from ${i.received_from}` : ""}` : <span className="muted">—</span>}</td>
             </tr>))}</tbody>
         </table></div>
       )}

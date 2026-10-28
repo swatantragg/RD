@@ -22,7 +22,7 @@ export default function Settings({ tab }: { tab?: string }) {
   ].filter(Boolean) as string[][];
   const cur = tabs.find((t) => t[0] === tab)?.[0] ?? tabs[0][0];
   return (
-    <Page title="Settings">
+    <Page title="Settings" intro="Your profile, the people who use the application, the reconciliation percentages and the activity log.">
       <div className="tabs" role="tablist">
         {tabs.map(([k, l]) => <button key={k} role="tab" aria-selected={cur === k} className={cur === k ? "on" : ""}
                                        onClick={() => go(k === "clients" ? "clients" : `settings/${k}`)}>{l}</button>)}
@@ -414,6 +414,19 @@ function AddPlatform({ onClose, onDone }: { onClose: () => void; onDone: () => P
 const AREAS: [string, string][] = [["", "Everything"], ["accounts", "Accounts and security"], ["catalogue", "Catalogue"], ["statements", "Statements"],
   ["reconciliation", "Reconciliation"], ["enquiries", "Enquiries"], ["settings", "Settings"], ["exports", "Exports"], ["reports", "Reports"]];
 
+/** What an event means, in words (the code stays beside it); events not listed show their code. */
+const ACTION_LABEL: Record<string, string> = {
+  "catalogue.import_previewed": "Catalogue previewed", "catalogue.import_applied": "Catalogue imported", "catalogue.import_discarded": "Catalogue preview discarded",
+  "recon.run_completed": "Reconciliation run", "recon.run_verified": "Reconciliation verified (second person)", "recon.items_reviewed": "Reconciliation items reviewed",
+  "recon.item_reviewed": "Reconciliation item reviewed", "recon.item_addressed": "Item already addressed", "recon.exception_updated": "Exception updated",
+  "enquiry.created": "Enquiry drafted", "enquiry.review_requested": "Enquiry forwarded for confirmation", "enquiry.internal_note": "Internal note on an enquiry",
+  "enquiry.approved": "Enquiry report confirmed (in the application)", "enquiry.confirmation_recorded": "Enquiry confirmation recorded (live / text / call)",
+  "enquiry.returned_for_correction": "Enquiry returned with a comment", "enquiry.manually_sent": "Enquiry sent to IPRS / PRS", "enquiry.follow_up_sent": "Reminder sent to IPRS / PRS",
+  "enquiry.response_received": "Reply from IPRS / PRS", "enquiry.closed": "Enquiry closed", "enquiry.withdrawn": "Enquiry withdrawn",
+  "statement.uploaded": "Statement uploaded", "export.reconciliation_report": "Reconciliation report downloaded", "export.enquiry_attachment": "Enquiry attachment downloaded",
+  "auth.signed_in": "Signed in", "auth.signed_out": "Signed out", "auth.failed": "Sign-in failed",
+};
+
 function Activity() {
   const [area, setArea] = useState("");
   const [qq, setQq] = useState("");
@@ -431,13 +444,14 @@ function Activity() {
       {!q.data ? <Loading /> : (
         <>
           <div className="tbl-wrap"><table className="tbl">
-            <thead><tr><th>When</th><th>Who</th><th>What</th><th>Details</th></tr></thead>
+            <thead><tr><th>Who</th><th>What</th><th>Details</th><th>Date and time</th></tr></thead>
             <tbody>{q.data.events.map((e) => (
-              <tr key={e.id}><td className="small nowrap">{when(e.at)}</td>
+              <tr key={e.id}>
                 <td>{e.actor}{e.detail?.actor_role && <div className="muted small">{e.detail.actor_role.replace("_", " ").toLowerCase()}</div>}</td>
-                <td><code>{e.action}</code><div className="muted small">{e.object_kind} {e.object_id}</div></td>
+                <td>{ACTION_LABEL[e.action] ? <b>{ACTION_LABEL[e.action]}</b> : <code>{e.action}</code>}<div className="muted small">{ACTION_LABEL[e.action] && <code>{e.action}</code>} {e.object_kind} {e.object_id}</div></td>
                 <td className="small audit-detail">{Object.entries(e.detail ?? {}).filter(([k]) => k !== "actor_role").map(([k, v]) => (
-                  <div key={k}><b>{k.replace(/_/g, " ")}:</b> {typeof v === "object" ? JSON.stringify(v) : String(v)}</div>))}</td></tr>))}</tbody>
+                  <div key={k}><b>{k.replace(/_/g, " ")}:</b> {typeof v === "object" ? JSON.stringify(v) : String(v)}</div>))}</td>
+                <td className="small nowrap">{when(e.at)}</td></tr>))}</tbody>
           </table></div>
           <div className="pager">{q.data.events.length >= 200 && <Button kind="ghost" className="sm" onClick={() => setBefore(q.data!.events[q.data!.events.length - 1].id)}>Older events</Button>}
             {before && <Button kind="ghost" className="sm" onClick={() => setBefore(null)}>Newest</Button>}</div>

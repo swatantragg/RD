@@ -2,7 +2,8 @@ import { createContext, useCallback, useContext, useEffect, useState, type React
 import { api, setCsrf } from "./api";
 
 export type ClientRef = { id: number; code: string; name: string };
-export type Release = { version: string; date: string; summary: string; points: string[] };
+/** sections: the notes of a bigger version under headings (1.7.3 on); points: a short list without headings. */
+export type Release = { version: string; date: string; summary: string; points: string[]; sections?: { title: string; points: string[] }[] };
 export type Role = "SUPER_ADMIN" | "ADMIN" | "USER";
 export type Capability = "view" | "prepare" | "draft_download" | "clients" | "manage" | "diagnostics" | "platforms"
   | "verify_mappings" | "approve_enquiries" | "assign_followups" | "close_enquiries" | "audit" | "reset_passwords"

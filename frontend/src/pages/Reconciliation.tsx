@@ -14,9 +14,26 @@ type Plat = { platform_id: number; platform: string; ready: boolean; year_ready:
   iprs: StRef[]; platform_reports: StRef[];
   years: { fy: number; label: string; platform_months: number; iprs_months: number; common_months: number }[];
   revenue_months: [string, string] | null; usage_months: [string, string] | null; setting: Setting | null; own_setting: boolean;
+  revenue_month_list: string[]; usage_month_list: string[]; available: { iprs: string[]; revenue: string | null; usage: string | null };
   suggestions: { period_start: string; period_end: string; iprs_statement: string; revenue_months: number; months: number; complete: boolean; usage_months: number }[] };
 type Options = { platforms: Plat[]; settings: Setting | null;
   others: { category: string; record_type: string; statement_source: string; statements: number }[] };
+
+/** The server's 'Jan 2026 - Mar 2026' with the dash used on screen. */
+const dash = (t: string) => t.replace(/ - /g, " – ");
+/** Months (ISO dates) in words: 'Jan 2026 – Mar 2026', with a comma between runs of months that do not meet. */
+function monthsText(ms: string[]): string {
+  const ks = Array.from(new Set(ms.map((m) => m.slice(0, 7)))).sort();
+  const n = (k: string) => Number(k.slice(0, 4)) * 12 + Number(k.slice(5, 7));
+  const out: string[] = [];
+  for (let i = 0; i < ks.length; ) {
+    let j = i;
+    while (j + 1 < ks.length && n(ks[j + 1]) === n(ks[j]) + 1) j++;
+    out.push(period(ks[i], ks[j]));
+    i = j + 1;
+  }
+  return out.join(", ");
+}
 
 /** '7 %'; the client share is 100 % while it is not set (the revenue reported is the total). */
 const pct = (v: string | number | null | undefined) => `${Number(v)} %`;
@@ -37,7 +54,7 @@ const runPeriod = (r: { run_kind?: string; usage_period_start: string; usage_per
   r.run_kind === "YEAR" ? `FY ${fyOf(r.usage_period_start)}-${String(fyOf(r.usage_period_start) + 1).slice(2)} (yearly)` : period(r.usage_period_start, r.usage_period_end);
 type RunRow = { id: number; run_reference: string; run_kind: string; usage_period_start: string; usage_period_end: string; platform_name: string; started_at: string;
   started_by: string; benchmark_percentage: string; client_interest_pct: string | null; client_share_pct: string | null; summary: Summary;
-  review?: { items: number; reviewed: number; needs_info: number } };
+  review?: { items: number; reviewed: number; needs_info: number; by?: string[] | null }; verified_by?: string | null; verified_at?: string | null };
 type Summary = { items: number; works: number; calculated: number; compared: number; missing_iprs: number; unmatched_recordings: number; unmatched_works: number;
   previous_revenue?: string; previous_iprs?: string; compared_months?: number; base?: "PLATFORM" | "CLIENT";
   underpaid?: number; shortfall?: string; usage?: string | null; usage_unmatched?: string | null; client_matched?: string | null; client_differences?: number;
@@ -68,7 +85,8 @@ function Start({ cid }: { cid: number }) {
   const s = p?.setting ?? o?.settings;
   const share = shareOf(s);
   return (
-    <Page title="Reconciliation">
+    <Page title="Reconciliation" intro={<>Compares the platform's revenue (e.g. Spotify) with what IPRS paid for the same period, song by song. Each enquiry number has a distinct set of data:
+      if a work's data for a period is covered in one report, it is not repeated in another report for the same period - a single source of data for every work.</>}>
       <Card><ClientSelect label="Client to reconcile" /></Card>
       <div id="run-recon" className="anchor" />
       <Card title="Run a reconciliation">
@@ -91,6 +109,12 @@ function Start({ cid }: { cid: number }) {
                       options={choices.map((x) => ({ value: String(x.platform_id), label: x.platform, tone: PLAT_STATUS[x.status][0],
                         meta: `${x.platform_reports.length} platform · ${x.iprs.length} IPRS`, hint: PLAT_STATUS[x.status][2] }))} />
             </label>
+            {p && <div className="box small">
+              <b>Available for {p.platform}</b>
+              <Facts items={[["Statements from IPRS", p.available.iprs.length ? p.available.iprs.map(dash).join(", ") : "none"],
+                [`Revenue from ${p.platform}`, p.available.revenue ? dash(p.available.revenue) : "none"],
+                [`Usage from ${p.platform}`, p.available.usage ? dash(p.available.usage) : "no usage report"]]} />
+            </div>}
             <div className="field"><span>Compare by</span>
               <div className="seg" role="radiogroup" aria-label="Compare by">
                 {([["PERIOD", "Months"], ["YEAR", "A financial year (with the year before)"]] as const).map(([k, l]) => (
@@ -132,7 +156,11 @@ function Start({ cid }: { cid: number }) {
                   <label className="field inline">From month<input className="input sm" type="month" required value={from} onChange={(e) => setFrom(e.target.value)} /></label>
                   <label className="field inline">To month<input className="input sm" type="month" required value={to} min={from} onChange={(e) => setTo(e.target.value)} /></label>
                 </span>
-                {from && to && to >= from && <p className="compare-line">Compares <b>{p.platform} revenue for {period(from, to)}</b> with <b>what IPRS paid for the same months</b>.</p>}
+                {from && to && to >= from && (() => {
+                  const um = p.usage_month_list.filter((m) => m.slice(0, 7) >= from && m.slice(0, 7) <= to);
+                  return <p className="compare-line">Works: compares <b>{p.platform} revenue for {period(from, to)}</b> with <b>what IPRS paid for the same months</b>.
+                    <br />Usage: {um.length ? <>compares <b>{monthsText(um)}</b> only - the months with {p.platform} usage.</> : <>no {p.platform} usage report for these months.</>}</p>;
+                })()}
               </div>
             )}
             <div className="box small">
@@ -159,7 +187,8 @@ function Start({ cid }: { cid: number }) {
                 <td className="num">{int(r.summary.missing_iprs)}</td>
                 <td className="num">{int(r.summary.unmatched_recordings + r.summary.unmatched_works)}</td>
                 <td className="small nowrap">{pct(r.benchmark_percentage)}{r.client_share_pct ? ` · ${pct(r.client_share_pct)}` : r.client_interest_pct ? ` × ${pct(r.client_interest_pct)} interest` : ""}</td>
-                <td className="small nowrap"><ReviewProgress v={r.review} /></td>
+                <td className="small nowrap"><ReviewProgress v={r.review} />
+                  <div>{r.verified_by ? <span className="good-t">✓ Verified by {r.verified_by} · {day(r.verified_at!)}</span> : <span className="muted">Not verified</span>}</div></td>
                 <td className="small nowrap">{when(r.started_at)} · {r.started_by}</td>
               </tr>))}</tbody>
           </table></ScrollX>
@@ -171,11 +200,32 @@ function Start({ cid }: { cid: number }) {
 }
 
 /** How far the review of a run's items has got: complete once every item is marked reviewed. */
-function ReviewProgress({ v }: { v?: { items: number; reviewed: number; needs_info: number } }) {
+function ReviewProgress({ v }: { v?: { items: number; reviewed: number; needs_info: number; by?: string[] | null } }) {
   if (!v || !v.items) return <span className="muted">—</span>;
+  if (!v.reviewed && !v.needs_info) return <span className="muted">Not reviewed</span>;
   const done = v.reviewed >= v.items;
   return <>{done ? <Pill tone="good">✓ Reviewed</Pill> : <>{int(v.reviewed)} of {int(v.items)} reviewed</>}
+    {v.by && v.by.length > 0 && <div>by {v.by.join(", ")}</div>}
     {v.needs_info > 0 && <div className="warn-t">{int(v.needs_info)} need{v.needs_info === 1 ? "s" : ""} information</div>}</>;
+}
+
+/** The second check: whoever ran the reconciliation, another person verifies it once (recorded with name and time). */
+function Verification({ runId, v, onDone }: { runId: number; v: RunView["verification"]; onDone: (x: RunView) => void }) {
+  const [open, setOpen] = useState(false);
+  const [note, setNote] = useState("");
+  return (
+    <div className={`verify-line ${v.by ? "ok" : ""}`}>
+      <span>Reconciled by <b>{v.ran_by}</b> · {when(v.ran_at)}</span>
+      {v.by ? <span className="good-t">✓ Verified by <b>{v.by}</b> · {when(v.at!)}{v.note ? ` - ${v.note}` : ""}</span>
+        : <span className="muted">Not verified yet: a second person (not {v.ran_by}) checks it once before the verified works are emailed to IPRS.</span>}
+      {v.can_verify && <Button kind="primary" className="sm" onClick={() => setOpen(true)}>Verify this reconciliation</Button>}
+      {open && <FormDialog title="Verify this reconciliation" submit="Verify" onClose={() => setOpen(false)}
+                           onSubmit={async () => { onDone(await api.post<RunView>(`/reconciliation/runs/${runId}/verify`, { note })); }}>
+        <p>You checked the reconciliation {v.ran_by} ran. Your name and the time are recorded on it and in the activity log; the figures do not change.</p>
+        <label className="field">Note (optional)<textarea className="input" rows={2} value={note} onChange={(e) => setNote(e.target.value)} /></label>
+      </FormDialog>}
+    </div>
+  );
 }
 
 /** Every platform in the client's statements, with what each kind covers, so it is clear what can be reconciled. */
@@ -223,9 +273,15 @@ type RunView = { run: RunRow & { notes: string[]; status: string; revenue_basis:
   compared_months: string[] | null; previous_period_start: string | null; previous_period_end: string | null;
   source_snapshot: { revenue_statements: Snap[]; iprs_statements: Snap[]; platform_reports?: Snap[]; client_statements?: Snap[]; base?: string }; source_snapshot_sha256: string };
   exceptions: { type: string; label: string; open: number; reviewed: number; closed: number; items: number }[]; later_statements: { statements: [number, string][]; items: number };
-  reviewed: { reviewed: number; needs_info: number; items: number }; labels: { exceptions: Record<string, string>; calc: Record<string, string>; kinds: Record<string, string>;
+  reviewed: { reviewed: number; needs_info: number; items: number; by: string[] | null };
+  verification: { ran_by: string; ran_at: string; by: string | null; at: string | null; note: string | null; can_verify: boolean }; labels: { exceptions: Record<string, string>; calc: Record<string, string>; kinds: Record<string, string>;
     review: Record<string, string>; mapping: Record<string, string>; run_kind: Record<string, string> };
-  periods: { source: PCol[]; iprs: PCol[]; usage?: PCol[]; client?: PCol[] }; blocks?: Block[] };
+  periods: { source: PCol[]; iprs: PCol[]; usage?: PCol[]; client?: PCol[] }; blocks?: Block[];
+  usage: { months: string[]; start: string; end: string; label: string; all_months: boolean; split_text: string | null } | null;
+  available: { iprs: string[]; revenue: string | null; usage: string | null; works: string } };
+/** The Usage tab's figures for the works listed (the months with platform usage only). */
+type UsageTotals = { songs: number; compared: number; revenue: string; total: string; expected: string; received: string; received_pct: string | null;
+  variance_pct: string | null; underpaid: number; shortfall: string; plays: string | null };
 type Block = { key: string; side: "PLATFORM" | "CLIENT" | "IPRS"; statement_id: number; file: string; reference: string; date: string;
   period_start: string | null; period_end: string | null; period_label: string; usage_label: string };
 
@@ -239,11 +295,13 @@ type Item = { id: number; item_no: number; item_kind: string; work_id: number | 
   iprs_client_share: string | null; benchmark_percentage: string | null; reference_benchmark_amount: string | null; iprs_royalty_amount: string | null;
   iprs_lines: number; observed_percentage: string | null; indicative_variance: string | null; mapping_status: string; data_validation_status: string;
   calculation_status: string; exception_status: string; later_statement_status: string; review_status: string; recommended_action: string;
+  reviewed_by_name?: string | null; reviewed_at?: string | null;
   open_exceptions: string[]; later_statements: { id: number; filename: string }[]; enquiry: { id: number; reference: string; status: string } | null;
   platform_id: number; previous_revenue: string | null; previous_iprs_royalty: string | null;
   usage_plays: string | null; usage_lines: number; client_statement_amount: string | null; client_statement_lines: number; client_iprs_difference: string | null;
   periods: { source: Record<string, string>; iprs: Record<string, string>; usage?: Record<string, string>; client?: Record<string, string> };
-  blocks?: Record<string, { amount: string | null; lines: number; usage: string | null }>; variance_pct?: string | null };
+  blocks?: Record<string, { amount: string | null; lines: number; usage: string | null }>; variance_pct?: string | null; iprs_split?: boolean;
+  held?: string | null };
 
 /** Year-on-year change in per cent; blank when either year has no amount. */
 function Change({ cur, old }: { cur: string | null; old: string | null }) {
@@ -261,15 +319,13 @@ const CALC_TONE: Record<string, Tone> = { CALCULATED: "good", NOT_CALCULATED: "w
 const REVIEW_TONE: Record<string, Tone> = { UNREVIEWED: "neutral", REVIEWED: "good", NEEDS_INFO: "warn" };
 const under = (i: Item) => i.indicative_variance !== null && Number(i.indicative_variance) > 0.005;
 
-/** Can this item go into a query to IPRS (same rule as the server's why_not_query)? */
+/** Can this item go into a query to IPRS (same rule as the server's why_not_query)? Every properly matched work of the
+ *  Works tab: link verified and work active in the Catalogue (held = why not, judged on the catalogue now). */
 function eligible(i: Item): boolean {
-  if (i.item_kind !== "WORK" || i.enquiry) return false;
-  if (/NOT_COMPARABLE|NO_IPRS_STATEMENT/.test(i.data_validation_status ?? "")) return false;
-  if (i.iprs_royalty_amount === null) return i.sound_recording_revenue !== null || i.client_statement_amount !== null;
-  return under(i) || (i.client_iprs_difference !== null && Number(i.client_iprs_difference) > 0.005);
+  return i.item_kind === "WORK" && !i.enquiry && !i.held;
 }
 
-const RUN_FILTERS = { kind: "WORK", exception: "", mapping: "", calc: "", review: "", q: "", sort: "title", variance: "" };
+const RUN_FILTERS = { kind: "WORK", view: "", exception: "", mapping: "", calc: "", review: "", q: "", sort: "title", variance: "" };
 const VARIANCE = [{ value: "", label: "Any result" }, { value: "underpaid", label: "Underpaid by IPRS" },
   { value: "client_diff", label: "Client statement ≠ IPRS paid" }];
 
@@ -285,10 +341,11 @@ function RunPage({ runId, cid }: { runId: number; cid: number }) {
   const [allBusy, setAllBusy] = useState(false);
   const [open, setOpen] = useState<number | null>(null);
   const [draft, setDraft] = useState(false);
+  const [left, setLeft] = useState(0);                   // works of the Works tab left out of the query (not properly matched)
   const [bulk, setBulk] = useState<string | null>(null);
   const rv = useQuery({ queryKey: ["recon-run", runId], queryFn: () => api.get<RunView>(`/reconciliation/runs/${runId}`) });
   const items = useQuery({ queryKey: ["recon-items", runId, f, offset], placeholderData: (x) => x,
-    queryFn: () => api.get<{ rows: Item[]; total: number }>(`/reconciliation/runs/${runId}/items${qs({ ...f, offset })}`) });
+    queryFn: () => api.get<{ rows: Item[]; total: number; blocks?: Block[]; usage?: UsageTotals }>(`/reconciliation/runs/${runId}/items${qs({ ...f, offset })}`) });
   if (rv.isError) return <Page title="Reconciliation"><Notice tone="bad">{(rv.error as Error).message}</Notice></Page>;
   if (!rv.data) return <Loading />;
   const r = rv.data.run;
@@ -301,6 +358,9 @@ function RunPage({ runId, cid }: { runId: number; cid: number }) {
   const hasCli = (rv.data.blocks ?? []).some((b) => b.side === "CLIENT");            // runs before 1.6.0 only
   const clearSel = () => { setTicked(new Set()); setElig(new Set()); };
   const set = (k: string, v: string) => { setF({ ...f, [k]: v }); setOffset(0); if (k !== "sort") clearSel(); };
+  const tab = (kind: string, view: string) => { setF({ ...f, kind, view }); setOffset(0); clearSel(); };
+  const uv = rv.data.usage;                                 // the Usage tab: the months with platform usage
+  const av = rv.data.available;
   const rows = items.data?.rows ?? [];
   const total = items.data?.total ?? 0;
   const pageAll = rows.length > 0 && rows.every((i) => ticked.has(i.id));
@@ -323,8 +383,12 @@ function RunPage({ runId, cid }: { runId: number; cid: number }) {
   const raiseQuery = async () => {                         // every work that can go into a query, whatever the filters
     setAllBusy(true);
     try {
-      const x = await api.get<{ ids: number[]; eligible: number[] }>(`/reconciliation/runs/${runId}/item-ids${qs({ kind: "WORK" })}`);
-      if (!x.eligible.length) { toast("No work in this run can go into a query: none is underpaid or missing at IPRS, or each already has an enquiry.", true); return; }
+      const x = await api.get<{ ids: number[]; eligible: number[]; held: number; enquired: number }>(`/reconciliation/runs/${runId}/item-ids${qs({ kind: "WORK" })}`);
+      if (!x.eligible.length) {
+        toast(`No work in this run can go into a query: ${[x.enquired && `${int(x.enquired)} already in an enquiry`, x.held && `${int(x.held)} wait for the Catalogue check (link not verified or work to review)`].filter(Boolean).join(", ") || "the Works tab is empty"}.`, true);
+        return;
+      }
+      setLeft(x.held);
       const top = await api.get<{ rows: Item[] }>(`/reconciliation/runs/${runId}/items${qs({ kind: "WORK", variance: "underpaid", sort: "variance" })}`);
       setKnown((k) => { const n = { ...k }; top.rows.forEach((i) => { n[i.id] = i; }); return n; });
       setTicked(new Set(x.eligible));
@@ -335,7 +399,7 @@ function RunPage({ runId, cid }: { runId: number; cid: number }) {
   const sel = Array.from(ticked);
   const selEnq = sel.filter((id) => elig.has(id));
   const allTicked = total > 0 && sel.length >= total;
-  const exportParams = { kind: f.kind, exception: f.exception, mapping: f.mapping, calc: f.calc, review: f.review, q: f.q, variance: f.variance, sort: f.sort };
+  const exportParams = { kind: f.kind, view: f.view, exception: f.exception, mapping: f.mapping, calc: f.calc, review: f.review, q: f.q, variance: f.variance, sort: f.sort };
   const snapList = (xs: Snap[] | undefined, what: string) => (xs ?? []).map((x) => <li key={what + x.id}>{what}: <a href={`#/statements/${x.id}`}>#{x.id} {x.file}</a></li>);
   // received % of the total revenue of the works compared, and the variance % = IPRS % - received % (7 % - 1 % = 6 %)
   const base = Number(s.total_compared ?? s.revenue_compared ?? 0);
@@ -350,12 +414,19 @@ function RunPage({ runId, cid }: { runId: number; cid: number }) {
             {me.can.prepare && <Button busy={allBusy} onClick={raiseQuery}>Raise a query to IPRS</Button>}
             <DownloadButton kind="primary" path={`/reconciliation/runs/${runId}/report${qs(exportParams)}`} onError={(m) => toast(m, true)}>Export report</DownloadButton>
           </>}>
+      <Verification runId={runId} v={rv.data.verification} onDone={(x) => { qc.setQueryData(["recon-run", runId], x); qc.invalidateQueries({ queryKey: ["recon-runs"] }); qc.invalidateQueries({ queryKey: ["overview"] }); toast("Verified."); }} />
       {r.notes.length > 0 && <Card tone="warn" title="Comparability notes"><ul className="plain">{r.notes.map((n, i) => <li key={i}>{n}</li>)}</ul></Card>}
       {rv.data.later_statements.statements.length > 0 && (
         <Notice tone="warn">Later IPRS statements were uploaded after this run and concern {rv.data.later_statements.items} item(s):
           {" "}{rv.data.later_statements.statements.map(([id, fn]) => <a key={id} href={`#/statements/${id}`}>{fn} </a>)}. Review them before preparing an enquiry, or run the reconciliation again.</Notice>
       )}
       <Card>
+        {av && platformRun && <div className="box small avail">
+          <Facts items={[["Statements from IPRS", av.iprs.length ? av.iprs.map(dash).join(", ") : "none"],
+            [`Revenue from ${r.platform_name}`, av.revenue ? dash(av.revenue) : "none"],
+            [`Usage from ${r.platform_name}`, av.usage ? dash(av.usage) : "no usage report for these months"]]} />
+          <p className="compare-line">Works: <b>{dash(av.works)}</b> - {r.platform_name} revenue and IPRS{uv ? <> · Usage: <b>{dash(uv.label)}</b> - the months with {r.platform_name} usage</> : ""}</p>
+        </div>}
         <div className="summary">
           <div><span>Works compared with IPRS</span><b>{int(s.compared)}</b></div>
           {platformRun ? <>
@@ -378,6 +449,7 @@ function RunPage({ runId, cid }: { runId: number; cid: number }) {
           <div><span>IPRS money not linked to a catalogue work</span><b><Money v={s.iprs_unmatched} /></b></div>
           {yearly && <div><span>Year before: revenue · IPRS paid</span><b>{s.previous_revenue == null && s.previous_iprs == null ? <span className="muted">no statements for those months</span> : <><Money v={s.previous_revenue ?? null} /> · <Money v={s.previous_iprs ?? null} /></>}</b></div>}
           <div><span>Items reviewed</span><b>{int(rv.data.reviewed.reviewed)} of {int(rv.data.reviewed.items)}{rv.data.reviewed.items > 0 && rv.data.reviewed.reviewed >= rv.data.reviewed.items && <span className="good-t"> ✓ all reviewed</span>}</b>
+            {rv.data.reviewed.by && rv.data.reviewed.by.length > 0 && <span className="muted small">by {rv.data.reviewed.by.join(", ")}</span>}
             {rv.data.reviewed.needs_info > 0 && <span className="warn-t small">{int(rv.data.reviewed.needs_info)} need{rv.data.reviewed.needs_info === 1 ? "s" : ""} information</span>}</div>
         </div>
         {rv.data.exceptions.length > 0 && <>
@@ -393,8 +465,9 @@ function RunPage({ runId, cid }: { runId: number; cid: number }) {
       <Card>
         <div className="toolbar">
           <div className="seg" role="radiogroup" aria-label="Item type">
-            {[["WORK", "Works"], ["UNMATCHED_RECORDING", "Unmatched recordings"], ["UNMATCHED_WORK", "Works not in catalogue"], ["", "All"]].map(([k, l]) => (
-              <button key={k} type="button" className={f.kind === k ? "on" : ""} onClick={() => set("kind", k)}>{l}</button>))}
+            {[["WORK", "", "Works"], ...(uv ? [["WORK", "usage", `Usage · ${dash(uv.label)}`]] : []), ["UNMATCHED_RECORDING", "", "Unmatched recordings"],
+              ["UNMATCHED_WORK", "", "Works not in catalogue"], ["", "", "All"]].map(([k, v, l]) => (
+              <button key={k + v} type="button" className={(v ? f.view === v : f.view !== "usage" && f.kind === k) ? "on" : ""} onClick={() => tab(k, v)}>{l}</button>))}
           </div>
           <input className="input" placeholder="Find a title, work number or ISRC" value={f.q} onChange={(e) => set("q", e.target.value)} />
           <Select size="sm" label="Result" value={f.variance} placeholder="Any result" onChange={(v) => set("variance", v)} options={VARIANCE.filter((x) => hasCli || x.value !== "client_diff")} />
@@ -407,6 +480,10 @@ function RunPage({ runId, cid }: { runId: number; cid: number }) {
                     { value: "observed", label: "Lowest % received first" }, { value: "iprs", label: "Most received from IPRS first" }, { value: "no", label: "Item number" }]} />
           <ResetFilters active={changed(f, RUN_FILTERS)} onReset={() => { setF(RUN_FILTERS); setOffset(0); clearSel(); }} />
         </div>
+        <p className="tab-note">{f.view === "usage" ? `${r.platform_name} usage reports cover 3 or 6 months: this tab maps the revenue of the same months as the usage (e.g. 3 months of usage → 3 months of revenue).`
+          : f.kind === "UNMATCHED_RECORDING" || f.kind === "UNMATCHED_WORK" ? "Work for Durga verification: these are mailed to Durga to verify and correct; her corrections come back in the updated catalogue (Catalogue → Import catalogue)."
+            : f.kind === "WORK" ? "Works compared with IPRS. Raise a query to IPRS sends every work of this tab that is properly matched (link verified, work active in the Catalogue); unmatched recordings and works not in the catalogue never go."
+              : "Every item of the reconciliation."}</p>
         {me.can.prepare && (sel.length === 0 ? (
           <span />
         ) : (
@@ -420,27 +497,48 @@ function RunPage({ runId, cid }: { runId: number; cid: number }) {
             <Button kind="primary" className="sm" onClick={() => setBulk("REVIEWED")}>Mark reviewed</Button>
             <Button className="sm" onClick={() => setBulk("NEEDS_INFO")}>Needs information</Button>
             <Button className="sm" onClick={() => setBulk("UNREVIEWED")}>Mark not reviewed</Button>
-            <Button className="sm" disabled={!selEnq.length} title={selEnq.length ? undefined : "Only works IPRS underpaid, paid less than the client's statement, or did not list go into a query"}
-                    onClick={() => setDraft(true)}>Prepare query draft ({int(selEnq.length)})</Button>
+            <Button className="sm" disabled={!selEnq.length} title={selEnq.length ? undefined : "Only properly matched works go into a query: works of the Works tab whose link is verified and that are active in the Catalogue, not already in an enquiry"}
+                    onClick={() => { setLeft(0); setDraft(true); }}>Prepare query draft ({int(selEnq.length)})</Button>
             <Button kind="ghost" className="sm" onClick={clearSel}>Clear selection</Button>
           </div>
         ))}
-        <div className="queue-bar"><Selection parts={[f.kind ? L.kinds[f.kind] : "all items", f.exception && L.exceptions[f.exception], f.calc && L.calc[f.calc],
+        <div className="queue-bar"><Selection parts={[f.view === "usage" && uv ? `Usage tab (${dash(uv.label)} only)` : f.kind ? L.kinds[f.kind] : "all items", f.exception && L.exceptions[f.exception], f.calc && L.calc[f.calc],
           f.variance && VARIANCE.find((x) => x.value === f.variance)?.label.toLowerCase(), f.review && L.review[f.review], f.q && `search '${f.q}'`]} /></div>
+        {items.data?.usage && uv && (() => {
+          const u = items.data.usage;
+          return (
+            <div className="box small usage-box">
+              <b>Usage tab: {dash(uv.label)} only - the months with {r.platform_name} usage. Every figure below is for these months.</b>
+              {uv.split_text && <span className="muted">{dash(uv.split_text)}</span>}
+              <div className="summary">
+                <div><span>Works with revenue in these months</span><b>{int(u.songs)}</b></div>
+                <div><span>[Platform] Client revenue</span><b><Money v={u.revenue} /></b></div>
+                {share !== null && share !== 100 && <div><span>[Calculated] Total revenue (100 %)</span><b><Money v={u.total} /></b></div>}
+                <div><span>[Calculated] Expected ({bench} %)</span><b><Money v={u.expected} /></b></div>
+                <div><span>[IPRS] Received</span><b><Money v={u.received} /></b>{u.received_pct != null && <span className="muted small">{Number(u.received_pct).toFixed(2)} % of the {share !== null && share !== 100 ? "total " : ""}revenue of the {int(u.compared)} works compared</span>}</div>
+                <div><span>[Calculated] Variance %</span><b className={u.variance_pct != null && Number(u.variance_pct) > 0.005 ? "under-t" : ""}>{u.variance_pct != null ? `${Number(u.variance_pct).toFixed(2)} %` : <span className="muted">not calculated</span>}</b></div>
+                <div><span>[Calculated] Shortfall of the {int(u.underpaid)} underpaid works</span><b className={Number(u.shortfall) > 0 ? "under-t" : ""}><Money v={u.shortfall} /></b></div>
+                <div><span>[Platform] Plays</span><b>{u.plays != null ? int(Number(u.plays)) : <span className="muted">none</span>}</b></div>
+              </div>
+            </div>);
+        })()}
         {!items.data ? <Loading /> : items.data.rows.length === 0 ? <Empty title="No item matches" /> : (() => {
-          const blocks = rv.data!.blocks ?? [];
+          const ut = items.data.usage;                         // the Usage tab: its own blocks (usage months only)
+          const blocks = items.data.blocks ?? rv.data!.blocks ?? [];
+          const cli = hasCli && !ut;
+          const yoy = yearly && !ut;
           const sides = (["PLATFORM", "CLIENT", "IPRS"] as const).map((k) => [k, blocks.filter((b) => b.side === k)] as const).filter(([, bs]) => bs.length > 0);
           const band: Record<string, [string, string]> = { PLATFORM: ["SOURCE", r.platform_name], CLIENT: ["CLIENT", `Client statement (${r.client_code})`], IPRS: ["IPRS", "IPRS royalty"] };
-          // the check: total revenue (100 %), the client's share as reported, expected, received, received %, variance
+          // the check: total revenue (100 %), client revenue (the client's share as reported), expected, received, received %, variance
           const split = share !== null;                       // runs before 1.6.0 have no client share column
-          const calc = platformRun ? 6 + (split ? 1 : 0) + (hasCli ? 1 : 0) : 2;
+          const calc = platformRun ? 6 + (split ? 1 : 0) + (cli ? 1 : 0) : 2;
           const interest = r.client_interest_pct ? Number(r.client_interest_pct) : null;     // runs before 1.6.0 only
           const cell = (i: Item, b: Block) => i.blocks?.[b.key];
           return (
             <ScrollX className="sheet-wrap" label="Reconciliation items">
               <table className="skv recon-skv blocks" ref={(t) => freeze(t)}>
                 <colgroup><col span={3} />{sides.map(([k, bs]) => <col key={k} span={bs.length * 4} style={tint(band[k][0])} />)}
-                  <col span={calc} style={tint("CALC")} />{yearly && <col span={4} style={tint("YOY")} />}<col span={3} style={tint("STATUS")} /></colgroup>
+                  <col span={calc} style={tint("CALC")} />{yoy && <col span={4} style={tint("YOY")} />}<col span={3} style={tint("STATUS")} /></colgroup>
                 <thead>
                   <tr className="h1">
                     <th rowSpan={3} className="fz fz0 band-id"><span className="w-h">{me.can.prepare &&
@@ -450,7 +548,7 @@ function RunPage({ runId, cid }: { runId: number; cid: number }) {
                     <th rowSpan={3} className="fz fz2 band-id">ISRC</th>
                     {sides.map(([k, bs]) => <th key={k} colSpan={bs.length * 4} className="band" style={fill(band[k][0])}>{band[k][1]}</th>)}
                     <th colSpan={calc} className="band" style={fill("CALC")}>{platformRun ? `Check: expected (${bench} %${split && share !== 100 ? " of total revenue" : ""}) vs paid` : "Check"}</th>
-                    {yearly && <th colSpan={4} className="band" style={fill("YOY")}>{r.previous_period_start ? `Year before (${period(r.previous_period_start, r.previous_period_end)})` : "Year before"}</th>}
+                    {yoy && <th colSpan={4} className="band" style={fill("YOY")}>{r.previous_period_start ? `Year before (${period(r.previous_period_start, r.previous_period_end)})` : "Year before"}</th>}
                     <th colSpan={3} className="band" style={fill("STATUS")}>Status and review</th>
                   </tr>
                   <tr className="h2">
@@ -461,14 +559,14 @@ function RunPage({ runId, cid }: { runId: number; cid: number }) {
                           <th key={b.key + "p"} rowSpan={2} className="band" style={fill(band[k][0])}>Period</th>],
                       <th key={b.key + "n"} rowSpan={2} className="band sep" style={fill(band[k][0])}>Distribution No</th>]))}
                     {platformRun && <><th rowSpan={2} className="num band" style={fill("CALC")}>{split ? "Total revenue (100 %)" : interest === null ? "Total revenue" : `Revenue counted (${interest} % client interest)`}</th>
-                      {split && <th rowSpan={2} className="num band" style={fill("CALC")} title="The revenue the platform reported: the client's share of the total">Client share ({share} %)</th>}
+                      {split && <th rowSpan={2} className="num band" style={fill("CALC")} title={`The revenue the platform reported: the client's ${share} % share of the total`}>Client revenue</th>}
                       <th rowSpan={2} className="num band" style={fill("CALC")}>Expected value ({bench} %)</th></>}
                     <th rowSpan={2} className="num band" style={fill("CALC")}>Received from IPRS</th>
-                    {platformRun && <><th rowSpan={2} className="num band" style={fill("CALC")}>Received % of {split && share !== 100 ? "total revenue" : "revenue"}</th>
-                      <th rowSpan={2} className="num band" style={fill("CALC")} title={`The difference in percentage points: ${bench} % expected − the % received`}>Variance % ({bench} % − received %)</th>
-                      <th rowSpan={2} className={`num band ${hasCli ? "" : "sep"}`} style={fill("CALC")}>Variance amount</th></>}
-                    {(hasCli || !platformRun) && <th rowSpan={2} className="num band sep" style={fill("CALC")}>Client − IPRS</th>}
-                    {yearly && <><th rowSpan={2} className="num band" style={fill("YOY")}>Revenue</th><th rowSpan={2} className="num band" style={fill("YOY")}>Change</th>
+                    {platformRun && <><th rowSpan={2} className="num band" style={fill("CALC")} title={`Received from IPRS ÷ ${split && share !== 100 ? "total revenue" : "revenue"}`}>Received %</th>
+                      <th rowSpan={2} className="num band" style={fill("CALC")} title={`The difference in percentage points: ${bench} % expected − the % received`}>Variance %</th>
+                      <th rowSpan={2} className={`num band ${cli ? "" : "sep"}`} style={fill("CALC")}>Variance amount</th></>}
+                    {(cli || !platformRun) && <th rowSpan={2} className="num band sep" style={fill("CALC")}>Client − IPRS</th>}
+                    {yoy && <><th rowSpan={2} className="num band" style={fill("YOY")}>Revenue</th><th rowSpan={2} className="num band" style={fill("YOY")}>Change</th>
                       <th rowSpan={2} className="num band" style={fill("YOY")}>IPRS paid</th><th rowSpan={2} className="num band sep" style={fill("YOY")}>Change</th></>}
                     <th rowSpan={2} className="band" style={fill("STATUS")}>Links</th><th rowSpan={2} className="band" style={fill("STATUS")}>Exceptions</th><th rowSpan={2} className="band" style={fill("STATUS")}>Review</th>
                   </tr>
@@ -505,15 +603,16 @@ function RunPage({ runId, cid }: { runId: number; cid: number }) {
                       ? <span className="bad-t small" title={MISSING}>No IPRS entry</span> : <Amount v={i.iprs_royalty_amount} />}</td>
                     {platformRun && <><td className="num"><Pct v={i.observed_percentage} /></td>
                       <td className="num">{i.variance_pct == null ? <span className="blank">—</span> : <span className={Number(i.variance_pct) > 0 ? "under-t" : "good-t"}>{Number(i.variance_pct).toFixed(2)} %</span>}</td>
-                      <td className={`num ${hasCli ? "" : "sep"}`}>{i.indicative_variance === null ? <span className="blank">—</span> :
+                      <td className={`num ${cli ? "" : "sep"}`}>{i.indicative_variance === null ? <span className="blank">—</span> :
                         <span className={under(i) ? "under-t" : "good-t"} title={under(i) ? "IPRS paid less than expected" : "IPRS paid at least the expected amount"}><Money v={i.indicative_variance} /></span>}</td></>}
-                    {(hasCli || !platformRun) && <td className="num sep">{i.client_iprs_difference === null ? <span className="blank">—</span> :
+                    {(cli || !platformRun) && <td className="num sep">{i.client_iprs_difference === null ? <span className="blank">—</span> :
                       <span className={Math.abs(Number(i.client_iprs_difference)) > 0.005 ? "warn-t" : ""}><Money v={i.client_iprs_difference} /></span>}</td>}
-                    {yearly && <><td className="num"><Amount v={i.previous_revenue} /></td><td className="num"><Change cur={i.sound_recording_revenue ?? i.client_statement_amount} old={i.previous_revenue} /></td>
+                    {yoy && <><td className="num"><Amount v={i.previous_revenue} /></td><td className="num"><Change cur={i.sound_recording_revenue ?? i.client_statement_amount} old={i.previous_revenue} /></td>
                       <td className="num"><Amount v={i.previous_iprs_royalty} /></td><td className="num sep"><Change cur={i.iprs_royalty_amount} old={i.previous_iprs_royalty} /></td></>}
                     <td><MappingPill status={i.mapping_status} /></td>
                     <td className="small wrap-cell">{i.open_exceptions.map((x) => L.exceptions[x]).join(", ")}{i.later_statements.length > 0 && <div className="warn-t">later statement to review</div>}</td>
-                    <td><Pill tone={REVIEW_TONE[i.review_status]}>{L.review[i.review_status]}</Pill></td>
+                    <td>{i.review_status === "UNREVIEWED" ? <span className="muted small">Not reviewed</span> : <><Pill tone={REVIEW_TONE[i.review_status]}>{L.review[i.review_status]}</Pill>
+                      {i.reviewed_by_name && <div className="muted small nowrap">by {i.reviewed_by_name}{i.reviewed_at ? ` · ${day(i.reviewed_at)}` : ""}</div>}</>}</td>
                   </tr>))}</tbody>
               </table>
             </ScrollX>
@@ -533,8 +632,9 @@ function RunPage({ runId, cid }: { runId: number; cid: number }) {
             <li className="muted">Snapshot fingerprint {r.source_snapshot_sha256.slice(0, 16)}…</li></ul>
         </More>
       </div>
-      {open && <ItemDialog itemId={open} labels={L} onClose={() => setOpen(null)} />}
-      {draft && <DraftDialog cid={cid} runId={runId} ids={selEnq} known={known} laterInRun={rv.data.later_statements.items > 0}
+      {open && <ItemDialog itemId={open} labels={L} onClose={() => setOpen(null)}
+                           usage={items.data?.usage && uv ? { label: uv.label, row: rows.find((x) => x.id === open) } : undefined} />}
+      {draft && <DraftDialog cid={cid} runId={runId} ids={selEnq} known={known} laterInRun={rv.data.later_statements.items > 0} left={left}
                              onClose={() => setDraft(false)} onDone={(id) => go(`enquiries/${id}`)} />}
       {bulk && <BulkReview runId={runId} status={bulk} label={L.review[bulk]} count={sel.length} ids={sel} onClose={() => setBulk(null)}
                            onDone={(n) => { clearSel(); qc.invalidateQueries({ queryKey: ["recon-items", runId] }); qc.invalidateQueries({ queryKey: ["recon-run", runId] });
@@ -558,8 +658,8 @@ function BulkReview({ runId, status, label, count, ids, onClose, onDone }: { run
   );
 }
 
-function DraftDialog({ cid, runId, ids, known, laterInRun, onClose, onDone }: { cid: number; runId: number; ids: number[]; known: Record<number, Item>;
-  laterInRun: boolean; onClose: () => void; onDone: (id: number) => void }) {
+function DraftDialog({ cid, runId, ids, known, laterInRun, left, onClose, onDone }: { cid: number; runId: number; ids: number[]; known: Record<number, Item>;
+  laterInRun: boolean; left: number; onClose: () => void; onDone: (id: number) => void }) {
   const items = ids.map((id) => known[id]).filter(Boolean);
   const unseen = ids.length - items.length;
   const later = items.filter((i) => i.later_statements.length > 0);
@@ -568,10 +668,13 @@ function DraftDialog({ cid, runId, ids, known, laterInRun, onClose, onDone }: { 
   return (
     <FormDialog title={`Prepare a query to IPRS (${int(ids.length)} work${ids.length === 1 ? "" : "s"})`} submit="Prepare draft" onClose={onClose}
                 onSubmit={async () => { const r = await api.post<{ enquiry: { id: number } }>("/enquiries", { client_id: cid, run_id: runId, item_ids: ids, later_reviewed: reviewed }); onDone(r.enquiry.id); }}>
-      <p>A draft letter asks IPRS why these works were underpaid (or not listed) for the period, with the platform revenue, the plays, what IPRS paid, its percentage and the {""}
-        expected amount for each. It is prepared for review and approval and is <b>never sent</b> from the application: after approval, a person sends it and records that here.</p>
+      <p>A draft letter to IPRS with the attached list of these works - the properly matched works of the Works tab - with the platform revenue, the plays, what IPRS paid {""}
+        and its percentage for each. It is confirmed inside the company first and is <b>never sent</b> from the application: a person sends it and records that here.</p>
+      {left > 0 && <Notice tone="warn">{int(left)} work{left === 1 ? " is" : "s are"} left out: the ISRC link is not verified or the work needs review in the Catalogue. {""}
+        Check {left === 1 ? "it" : "them"} in the Catalogue, then put {left === 1 ? "it" : "them"} in a later query.</Notice>}
       <ul className="plain small">{items.slice(0, 12).map((i) => <li key={i.id}>{i.work_title} ({i.internal_work_number}) — {i.iprs_royalty_amount === null ? "no IPRS entry"
-        : i.indicative_variance !== null && Number(i.indicative_variance) > 0.005 ? <>paid <Money v={i.iprs_royalty_amount} />, expected <Money v={i.reference_benchmark_amount} /></> : "the client's statement shows more than IPRS paid"}</li>)}
+        : i.indicative_variance !== null && Number(i.indicative_variance) > 0.005 ? <>paid <Money v={i.iprs_royalty_amount} />, expected <Money v={i.reference_benchmark_amount} /></>
+          : i.sound_recording_revenue === null ? <>paid <Money v={i.iprs_royalty_amount} />, no platform revenue to compare</> : <>paid <Money v={i.iprs_royalty_amount} />, at or above expected</>}</li>)}
         {ids.length > Math.min(12, items.length) && <li>… and {int(ids.length - Math.min(12, items.length))} more</li>}</ul>
       {ask && <label className="check"><input type="checkbox" checked={reviewed} required onChange={(e) => setReviewed(e.target.checked)} />
         I reviewed the later IPRS statement(s){later.length ? ` for ${later.map((i) => i.internal_work_number).join(", ")}` : " that concern these items"}; they do not already address these items.</label>}
@@ -588,7 +691,9 @@ type ItemDetail = { item: Item & { review_note: string | null; reviewed_by_name:
 const SOURCE_TYPE: Record<string, string> = { CLIENT_REVENUE: "Client (source revenue)", PLATFORM_REVENUE: "Platform revenue", PLATFORM_USAGE: "Platform usage",
   CLIENT_STATEMENT: "Client statement", IPRS_ROYALTY: "IPRS paid" };
 
-function ItemDialog({ itemId, labels, onClose }: { itemId: number; labels: RunView["labels"]; onClose: () => void }) {
+/** usage: opened from the Usage tab - the row's figures for the usage months, shown above the run's own. */
+function ItemDialog({ itemId, labels, onClose, usage }: { itemId: number; labels: RunView["labels"]; onClose: () => void;
+  usage?: { label: string; row?: Item } }) {
   const { me } = useApp();
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["recon-item", itemId], queryFn: () => api.get<ItemDetail>(`/reconciliation/items/${itemId}`) });
@@ -604,6 +709,24 @@ function ItemDialog({ itemId, labels, onClose }: { itemId: number; labels: RunVi
     <Dialog title={i ? (i.work_title ?? i.isrcs[0] ?? "Item") : "Item"} sub={i ? `${labels.kinds[i.item_kind]} · item ${i.item_no} · ${period(i.usage_period_start, i.usage_period_end)}` : undefined} onClose={onClose} wide="xl">
       {!d || !i ? <Loading /> : (
         <div className="form full">
+          {usage?.row && (() => {
+            const u = usage.row;
+            const split = u.client_share_pct && Number(u.client_share_pct) !== 100;
+            return (
+              <div className="box small">
+                <b>Usage tab: {dash(usage.label)} only</b>
+                <Facts items={[["Client revenue", <Amount v={u.sound_recording_revenue} />],
+                  ...(split ? [["Total revenue (100 %)", <Amount v={u.eligible_revenue_basis} />] as [string, React.ReactNode]] : []),
+                  ["Usage (plays)", u.usage_plays != null ? `${int(Number(u.usage_plays))} plays` : <span className="muted">none</span>],
+                  ["Expected from IPRS", <Amount v={u.reference_benchmark_amount} />],
+                  ["Received from IPRS", u.iprs_royalty_amount === null ? <span className="muted">no IPRS entry</span> : <><Amount v={u.iprs_royalty_amount} />{u.iprs_split && <span className="muted small"> part of the IPRS amount, by the song's revenue in these months</span>}</>],
+                  ["Received %", <Pct v={u.observed_percentage} />],
+                  ["Variance %", u.variance_pct == null ? <span className="muted">—</span> : <Pct v={u.variance_pct} />],
+                  ["Variance (expected − received)", u.indicative_variance == null ? <span className="muted">—</span> : Number(u.indicative_variance) > 0.005
+                    ? <span className="under-t"><Money v={u.indicative_variance} /> underpaid</span> : <span className="good-t">paid in full (<Money v={u.indicative_variance} />)</span>]]} />
+                <span className="muted">Below: the whole run ({period(i.usage_period_start, i.usage_period_end)}).</span>
+              </div>);
+          })()}
           <div className="two">
             <div>
               <h2>Source values</h2>

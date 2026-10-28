@@ -102,7 +102,9 @@ def save_client(actor: dict, body: dict, client_id: int | None = None) -> dict:
             if name:
                 vals["name"] = name
             if "active" in body:
-                vals["active"] = bool(body["active"])
+                if not isinstance(body["active"], bool):
+                    raise RDError("Say whether the client is switched on or off.")
+                vals["active"] = body["active"]
             db.update(conn, "client", client_id, vals)
             audit.record(conn, "client.updated", actor, "client", client_id, dict(fields=sorted(body)))
         for h in body.get("holders") or []:

@@ -4,6 +4,169 @@ from __future__ import annotations
 from . import __version__
 
 RELEASES: list[dict] = [
+    dict(version="1.7.3", date="28 Oct 2026",
+         summary="A security and quality release: the whole application was tested - 130 unit, integration and "
+                 "test-driven tests, and every one of its 112 server actions tried with wrong input by three kinds of "
+                 "account - and every bug found was fixed.",
+         points=[],
+         sections=[
+             dict(title="Bugs fixed", points=[
+                 "Downloads (reconciliation report, enquiry attachment, working paper) failed with a server error when "
+                 "a song title, a note or other text held an invisible control character. Such characters are now "
+                 "left out and the download works.",
+                 "A file name with quotes, a semicolon or a line break could break the download. Names are cleaned "
+                 "for every download.",
+                 "12 actions answered 'Something went wrong on the server' when a field was missing or of the wrong "
+                 "kind - raising a query, starting a reconciliation, adding a work or an ISRC, importing a stored "
+                 "catalogue, saving reconciliation settings, reviewing and verifying, marking notifications read. "
+                 "They now say what is missing.",
+                 "Giving work - a follow-up, an exception, an enquiry, a new query - to an account that does not "
+                 "exist failed with a server error, and to a switched-off account it was accepted. Both are now "
+                 "refused with a plain message.",
+                 "Giving a User a client that does not exist failed with a server error; naming a client twice failed "
+                 "too. Both are handled.",
+                 "On / off answers sent as text ('false', 'no') counted as 'yes': switching an account or a client on "
+                 "or off, 'I reviewed the later IPRS statements', 'mark the links verified'. Only a real yes or no "
+                 "counts now.",
+                 "Sign-in and My profile failed with a server error when the password was not text, and a damaged "
+                 "stored password could stop sign-in. Both now count as a wrong password."]),
+             dict(title="Security fixes", points=[
+                 "Catalogue → Import: a User could mark every link of an imported catalogue as verified, although "
+                 "verifying links is an Admin's task - and verified links decide which works go into a query to "
+                 "IPRS. Only Admins verify now; a User's import leaves new links pending, and the box is shown to "
+                 "Admins only.",
+                 "A refusal by the database no longer shows table or rule names; it says 'You do not have access to "
+                 "this.'",
+                 "Passwords have at most 128 characters (very long input is refused before it is checked), and only "
+                 "the application's own password strength settings are accepted.",
+                 "The security token sent with every change is compared in constant time.",
+                 "The web server passes only the real address of the computer to the application, so a forged "
+                 "address cannot appear in its logs."]),
+             dict(title="Security in place", points=[
+                 "Sign-in: passwords stored only as salted scrypt hashes; 15-minute lock after 8 failed attempts; "
+                 "the same message for a wrong email or password; at most 10 sign-in attempts a minute per computer.",
+                 "Sessions: random tokens kept only as hashes, ending after 10 hours or at sign-out; the cookie "
+                 "cannot be read by scripts or sent from other sites; every change needs the session's security "
+                 "token; changing the password signs the other browsers out; switching an account off or changing "
+                 "its role signs it out at once.",
+                 "Accounts: three roles checked on the server for every request; one Super Admin, protected by the "
+                 "database; temporary passwords must be changed at the first sign-in; nobody changes their own role.",
+                 "Clients: a User sees only the clients granted to them - checked by the application and again by "
+                 "the database (row-level security), for lists and for every record opened by number.",
+                 "Duties: the preparer never confirms their own enquiry; a second person verifies a reconciliation; "
+                 "nothing can be copied or recorded as sent before the confirmation; completed reconciliations "
+                 "never change.",
+                 "Activity log: sign-ins (and failed attempts), changes and report downloads are recorded, chained "
+                 "so that any edit or deletion shows; passwords and tokens are never written to it.",
+                 "Files: only plain .xlsx and .csv; macro workbooks, external links, embedded objects, path tricks "
+                 "and ZIP bombs refused before reading; size, sheet and cell limits; stored write-once; text that "
+                 "looks like a formula is never a formula in a download.",
+                 "Web page: strict content security policy, no framing by other sites, no content sniffing, no "
+                 "caching of data; the web server does not show its software version; production refuses weak "
+                 "database passwords and hides the API documentation.",
+                 "Checked in this version: no known vulnerability in the application's packages (web and server)."]),
+             dict(title="Also since 1.7.0", points=[
+                 "1.7.1: a query to IPRS lists every properly matched work of the Works tab (works whose link is not "
+                 "verified, or that need review, are left out); pop-up notifications when someone gives you work; "
+                 "'Check the links again' says what it found; one-line help under Follow-ups and Send a note.",
+                 "1.7.2: Home shows the enquiries waiting in two lanes - 1 Internal (not sent yet) and 2 External "
+                 "(sent); the notes and the Activity log read who, what, then the date and time, with a name tag per "
+                 "person."])]),
+    dict(version="1.7.2", date="28 Oct 2026",
+         summary="Home shows the enquiries waiting in two clearly different lanes - 1 Internal (not sent yet) and 2 "
+                 "External (sent to IPRS / PRS) - and every enquiry log reads who, what, then the date and time.",
+         points=["Home → Enquiries waiting: two lanes side by side (one under the other on a narrow screen). 1 "
+                 "Internal, in amber: not sent yet, a colleague confirms the report inside the company. 2 External, "
+                 "in teal: sent, waiting for IPRS / PRS to reply. Each lane shows its count and its steps (Prepared → "
+                 "Forwarded → Confirmed → Sent; Sent → Reminder 1 → 2 → 3 → Call to the IPRS CEO), and each enquiry "
+                 "a bar with how far it is, what it waits for, the next follow-up and the last note.",
+                 "Enquiry → Notes and Activity log: still on their time line, each line now shows the person first - a "
+                 "name tag with initials, one colour per person - then what they did, then the date and time, in "
+                 "aligned columns (Who · What · Date and time).",
+                 "Settings → Activity log: the same order - Who, What, Details, Date and time."]),
+    dict(version="1.7.1", date="28 Oct 2026",
+         summary="A query to IPRS now lists the works of the Works tab that are properly matched, a pop-up tells you "
+                 "when someone gives you work, and 'Check the links again' says what it found.",
+         points=["Reconciliation → Raise a query to IPRS: the query and its attachment list every work of the Works "
+                 "tab that is properly matched - its ISRC link verified and the work active in the Catalogue - "
+                 "whether IPRS underpaid it, did not list it, paid it in full or there is no platform revenue to "
+                 "compare. Unmatched recordings and works not in the catalogue never go. Works whose link is not "
+                 "verified yet, or that need review in the Catalogue, are left out (the draft says how many), so the "
+                 "query no longer waits for them; check them in the Catalogue and put them in a later query.",
+                 "Pop-up notifications in the top-right corner when someone else gives you work: an enquiry assigned "
+                 "to you, a report to confirm, a follow-up, a reconciliation exception - and, for the person who "
+                 "prepared an enquiry, the report returned or confirmed. 'Open' goes to it; × dismisses it. The "
+                 "screen checks every 30 seconds.",
+                 "Enquiry: one line under Follow-ups and under Send a note says what each does and does not do. A "
+                 "follow-up is a task with a due date for one person; a note is a message. Neither sends anything to "
+                 "IPRS or moves the enquiry to the next step.",
+                 "Enquiry → Check the links again: it said 'Done.' even when nothing had changed. It now says whether "
+                 "the draft is ready to forward, or what still holds it back (how many ISRC links to verify and works "
+                 "to review, with their numbers); the page shows the same, and checking again with no change adds no "
+                 "new line to the history."]),
+    dict(version="1.7.0", date="27 Oct 2026",
+         summary="Enquiries are in two parts - internal (a colleague confirms the report before it goes to IPRS / PRS) "
+                 "and external (sent, with weekly reminders until IPRS / PRS replies) - and a second person verifies "
+                 "each reconciliation.",
+         points=["Home → Enquiries waiting has two lists. 'Internal - confirmation before sending': cleared by the "
+                 "preparer, waiting for a senior colleague to confirm the report. 'External - reply from IPRS / PRS': "
+                 "sent, waiting for their reply. Each line shows the enquiry number and what it waits for, and opens "
+                 "the enquiry.",
+                 "Enquiry, internal: 'Forward for confirmation' sends it to a colleague (any person with an account), "
+                 "who gets 'Confirm the report' in their follow-ups, reads the text, downloads both reports and "
+                 "confirms them or returns them with a comment; notes can go both ways. If the colleague is busy and "
+                 "saw the report live on your screen, or confirmed it by a text message, 'Record a confirmation given "
+                 "outside the application' notes how (live demonstration, text, call, meeting), who and the date and "
+                 "time. The preparer does not confirm their own enquiry. 'Copy text' and 'Record that it was sent' "
+                 "open only after the confirmation.",
+                 "Enquiry, external: after the sending, reminder 1 is due 7 days later (the same mail again), then "
+                 "every 7 days, 3 times; the 4th reminder is a call, escalated to the CEO of IPRS. A reply from IPRS / "
+                 "PRS stops the reminders.",
+                 "The enquiry's Activity log lists every step in two parts, inside the company and with IPRS / PRS, in "
+                 "plain words with who and when; each step is also in Settings → Activity log.",
+                 "Reconciliation: the Review column names who reviewed (else 'Not reviewed'), on the list of earlier "
+                 "reconciliations and on every item. 'Verify this reconciliation': a second person - not the one who "
+                 "ran it - verifies it once; the name and time are shown on the run, in its list and on Home, and "
+                 "recorded in the activity log.",
+                 "Catalogue → Import: say how the catalogue was received (mail or WhatsApp) and from whom before "
+                 "applying it. Home → My follow-ups lists the catalogues received with the file name, the date and "
+                 "time imported and how it came; Import history shows the same.",
+                 "Home: under the greeting, 'This calculation is taken into consideration with the understanding that "
+                 "the master revenue received is from the Indian territory only.' Every page and Home section has a "
+                 "one-line description of what it is for."]),
+    dict(version="1.6.3", date="26 Oct 2026",
+         summary="A reconciliation now has a Usage tab beside Works: the months with platform usage (e.g. Jan - Mar "
+                 "2026), every figure for those months only, and the start page and run page say what is available.",
+         points=["Reconciliation, start: 'Available for Spotify' shows the statements from IPRS, the revenue from "
+                 "Spotify and the usage from Spotify, each with its months. Once the months are chosen it says what "
+                 "the Works tab compares (revenue and IPRS, e.g. Oct 2025 - Mar 2026) and what the Usage tab compares "
+                 "(the months with Spotify usage, e.g. Jan - Mar 2026).",
+                 "Run page: the same 'Available' lines at the top, and a Usage tab beside Works. It lists the works "
+                 "with revenue in the usage months, with every figure for those months only: the Spotify amount and "
+                 "usage, what IPRS paid, the total revenue, expected, received %, variance % and variance amount, with "
+                 "the totals above the table.",
+                 "IPRS pays one amount for its whole period (e.g. Oct 2025 - Mar 2026). For the usage months the "
+                 "Usage tab counts the part of it that follows the song's revenue: Rs. 60 paid, half the song's "
+                 "Oct - Mar revenue earned in Jan - Mar -> Rs. 30. The tab, the item pop-up and the downloads say so.",
+                 "Export report on the Usage tab downloads the usage months only (file name '..._usage_2026-01_to_"
+                 "2026-03_...').",
+                 "Enquiry 'Download with usage': only the usage months - the songs with revenue in them, every figure "
+                 "for those months, with Usage and Revenue per usage (file name with those months). Songs with no "
+                 "revenue in them are left out and counted in the notes."]),
+    dict(version="1.6.2", date="26 Oct 2026",
+         summary="The downloaded reports have a shorter check - Client revenue, Received from IPRS, Received % and "
+                 "Variance % - and the check columns have shorter names everywhere.",
+         points=["Reconciliation 'Export report' and a query's attachment ('Download attachment'): the check section is "
+                 "Client revenue · Received from IPRS · Received % · Variance %; the expected value and the variance "
+                 "amount are left out (also the expected royalty and total shortfall lines of the report's Summary "
+                 "sheet). The letter to IPRS describes the attachment the same way.",
+                 "Column names: 'Client share (52 %)' / 'Revenue' is now 'Client revenue', 'Received % of total "
+                 "revenue' is 'Received %' and 'Variance % (7 % - received %)' is 'Variance %' - on the "
+                 "reconciliation page and in every download.",
+                 "The reconciliation page and the query attachment with usage ('Download with usage') keep every "
+                 "column, with the expected value and the variance amount.",
+                 "Home: 'Enquiries waiting' says what it means - queries to IPRS that are not finished, waiting for a "
+                 "step from us or a reply from IPRS."]),
     dict(version="1.6.1", date="24 Oct 2026",
          summary="The variance % is the difference in percentage points (7 % expected, 1 % received = 6 %), the "
                  "reconciliation says in plain words which months it compares, and its page shows one dashboard.",

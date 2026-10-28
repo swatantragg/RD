@@ -3,13 +3,13 @@ from __future__ import annotations
 
 import re
 
-from fastapi import APIRouter, Body, Depends, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 from .. import __version__, audit, config, db, releases, security
 from ..normalize import s
 from ..rd import access
-from .deps import COOKIE, J, Unauthorized, actor
+from .deps import COOKIE, J, Unauthorized, actor, json_body
 
 router = APIRouter()
 
@@ -43,20 +43,27 @@ def options():
     return J(dict(signup=signup, version=__version__))
 
 
+def _text(v) -> str:
+    """A password field: text only (a number, list or object sent instead counts as empty)."""
+    return v if isinstance(v, str) else ""
+
+
 EMAIL_RX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 @router.post("/auth/signup")
-def signup(request: Request, body: dict = Body(...)):
+def signup(request: Request, body: dict = Depends(json_body)):
     """Set up a new installation: the first account becomes the Super Admin. Once there is a Super Admin, accounts
     are created by an Admin and this endpoint refuses."""
-    name, email, password = s(body.get("name")), s(body.get("email")).lower(), body.get("password") or ""
+    name, email, password = s(body.get("name")), s(body.get("email")).lower(), _text(body.get("password"))
     if not name or len(name) > 120:
         raise ValueError("Please enter your name.")
     if not EMAIL_RX.match(email) or len(email) > 200:
         raise ValueError("Please enter a valid email address.")
     if len(password) < security.PASSWORD_MIN:
         raise ValueError(f"The password must be at least {security.PASSWORD_MIN} characters long.")
+    if len(password) > security.PASSWORD_MAX:
+        raise ValueError(f"The password can have at most {security.PASSWORD_MAX} characters.")
     if password.lower() in (email, name.lower()):
         raise ValueError("Please choose a password that is not your name or email.")
     from ..seed import create_user
@@ -75,8 +82,8 @@ def signup(request: Request, body: dict = Body(...)):
 
 
 @router.post("/auth/login")
-def login(request: Request, body: dict = Body(...)):
-    email, password = s(body.get("email")).lower(), body.get("password") or ""
+def login(request: Request, body: dict = Depends(json_body)):
+    email, password = s(body.get("email")).lower()[:200], _text(body.get("password"))
     with db.tx() as conn:
         fails = db.scalar(conn, "SELECT count(*) FROM login_attempt WHERE email = %s AND NOT ok AND at > now() - "
                                 "interval '15 minutes'", (email,))
@@ -141,7 +148,7 @@ def release_notes(a: dict = Depends(actor)):
 
 
 @router.patch("/me")
-def update_me(body: dict = Body(...), a: dict = Depends(actor)):
+def update_me(body: dict = Depends(json_body), a: dict = Depends(actor)):
     """My profile: change the display name, or the password (the current password is needed)."""
     changed = []
     with db.tx() as conn:
@@ -152,12 +159,14 @@ def update_me(body: dict = Body(...), a: dict = Depends(actor)):
             conn.execute("UPDATE app_user SET name = %s WHERE id = %s", (name, a["id"]))
             changed.append("name")
         if body.get("new_password"):
-            new = body["new_password"]
+            new = _text(body["new_password"])
             u = db.one(conn, "SELECT password_hash, must_change_password FROM app_user WHERE id = %s", (a["id"],))
-            if not security.check_password(body.get("current_password") or "", u["password_hash"]):
+            if not security.check_password(_text(body.get("current_password")), u["password_hash"]):
                 raise ValueError("Your current password is not right.")
             if len(new) < security.PASSWORD_MIN:
                 raise ValueError(f"The new password must be at least {security.PASSWORD_MIN} characters long.")
+            if len(new) > security.PASSWORD_MAX:
+                raise ValueError(f"The new password can have at most {security.PASSWORD_MAX} characters.")
             if "confirm_password" in body and body["confirm_password"] != new:
                 raise ValueError("The two new passwords are not the same.")
             if security.check_password(new, u["password_hash"]):

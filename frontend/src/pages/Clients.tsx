@@ -22,7 +22,7 @@ export default function Clients({ start }: { start?: string }) {
     else if (start === "new") go("clients");
   };
   return (
-    <Page title="Clients"
+    <Page title="Clients" intro="The music companies whose royalties are reconciled, with their IPRS member numbers."
           actions={me.can.clients && <Button kind="primary" onClick={() => setEditing("new")}>Add a client</Button>}>
       {editing && <ClientDialog key={editing === "new" ? "new" : editing.id} client={editing === "new" ? null : editing} onDone={close} />}
       {list.length === 0 ? <Card><Empty title="No clients">{me.can.clients ? "Add the first client." : "Ask your administrator for access."}</Empty></Card> : (

@@ -18,6 +18,7 @@ import zipfile
 from collections import defaultdict
 from decimal import Decimal
 
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
@@ -52,9 +53,12 @@ def fill(c: str) -> PatternFill:
 
 
 def put(ws, r: int, c: int, v, fmt: str | None = None, font=None, fl: str | None = None, border=None, al=None):
-    """Write one cell. Untrusted text that looks like a formula is stored as plain text (V3 §13.5)."""
+    """Write one cell. Untrusted text that looks like a formula is stored as plain text (V3 §13.5); control characters
+    a worksheet cannot hold (typed or uploaded) are dropped instead of breaking the download."""
     if isinstance(v, Decimal):
         v = names.q2(v)
+    if isinstance(v, str):
+        v = ILLEGAL_CHARACTERS_RE.sub("", v)
     cell = ws.cell(r, c, v)
     if isinstance(v, str) and v[:1] in ("=", "+", "-", "@", "\t", "\r"):
         cell.data_type = "s"

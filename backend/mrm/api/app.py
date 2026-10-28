@@ -1,6 +1,7 @@
 """HTTP API. Money leaves the server as exact decimal strings; every state change needs the session's CSRF token."""
 from __future__ import annotations
 
+import hmac
 import logging
 
 import psycopg
@@ -27,7 +28,7 @@ async def csrf_guard(request: Request, call_next):
             and request.url.path not in ("/api/auth/login",) and request.cookies.get(COOKIE):
         from ..security import load_session
         s = load_session(request.cookies.get(COOKIE))
-        if s and request.headers.get("x-csrf-token") != s["csrf"]:
+        if s and not hmac.compare_digest(request.headers.get("x-csrf-token") or "", s["csrf"]):
             return JSONResponse({"detail": "Your session expired. Please reload the page."}, status_code=403)
     resp: Response = await call_next(request)
     resp.headers.setdefault("Cache-Control", "no-store")
@@ -52,10 +53,17 @@ for _cls in (ValueError, RDError):
     app.add_exception_handler(_cls, lambda _, e: _err(400, str(e)))
 
 
+# PostgreSQL's own refusals name tables and policies: they are logged, never shown
+_DB_INTERNAL = ("permission denied", "new row violates row-level security", "row-level security")
+
+
 @app.exception_handler(psycopg.errors.InsufficientPrivilege)
 async def _frozen(_, e):
-    log.warning("refused by the database: %s", str(e).split("\n")[0])
-    return _err(409, "This record is locked and cannot be changed. " + str(e).split("\n")[0])
+    first = str(e).split("\n")[0]
+    log.warning("refused by the database: %s", first)
+    if any(t in first.lower() for t in _DB_INTERNAL):
+        return _err(403, "You do not have access to this.")
+    return _err(409, "This record is locked and cannot be changed. " + first)
 
 
 @app.exception_handler(psycopg.errors.UniqueViolation)

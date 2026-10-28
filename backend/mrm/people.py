@@ -40,6 +40,22 @@ def _grants(conn, uid: int) -> list[int]:
     return [r["client_id"] for r in db.all(conn, "SELECT client_id FROM client_grant WHERE user_id = %s", (uid,))]
 
 
+def _clients(conn, v) -> list[int]:
+    """The clients granted to a User: existing clients only, each once (a wrong id is refused, not a server error)."""
+    if v in (None, ""):
+        return []
+    if not isinstance(v, list):
+        raise PeopleError("Choose the clients from the list.")
+    try:
+        ids = sorted({int(c) for c in v if not isinstance(c, bool)})
+    except (TypeError, ValueError):
+        raise PeopleError("Choose the clients from the list.") from None
+    known = {r["id"] for r in db.all(conn, "SELECT id FROM client WHERE id = ANY(%s)", (ids,))}
+    if set(ids) - known:
+        raise PeopleError("One of the chosen clients does not exist.")
+    return ids
+
+
 def _person(conn, uid: int) -> dict:
     u = db.one(conn, "SELECT * FROM app_user WHERE id = %s", (uid,))
     if not u or u["deleted_at"] is not None:
@@ -100,7 +116,7 @@ def create_person(actor: dict, body: dict) -> dict:
         if db.scalar(conn, "SELECT id FROM app_user WHERE email = %s", (email,)):
             raise PeopleError("An account with this email already exists.")
         uid = create_user(conn, email, name, role, pw, created_by=actor["id"], must_change_password=True)
-        clients = [int(c) for c in body.get("clients") or []] if role == USER else []
+        clients = _clients(conn, body.get("clients")) if role == USER else []
         for cid in clients:
             conn.execute("INSERT INTO client_grant (user_id, client_id, granted_by) VALUES (%s, %s, %s) "
                          "ON CONFLICT DO NOTHING", (uid, cid, actor["id"]))
@@ -129,15 +145,18 @@ def update_person(actor: dict, uid: int, body: dict) -> dict:
                 raise Forbidden("Accounts can be Users or Admins. Nobody can be made Super Admin here.")
             vals["role"] = role
         if "active" in body:
-            vals["active"] = bool(body["active"])
+            if not isinstance(body["active"], bool):
+                raise PeopleError("Say whether the account is switched on or off.")
+            vals["active"] = body["active"]
         if vals:
             db.update(conn, "app_user", uid, vals)
             conn.execute("UPDATE app_user SET updated_at = now() WHERE id = %s", (uid,))
         if vals.get("active") is False or ("role" in vals and vals["role"] != u["role"]):
             security.revoke_all(conn, uid)                   # a switched-off or re-roled account signs in again
         if "clients" in body:
+            granted = _clients(conn, body.get("clients"))
             conn.execute("DELETE FROM client_grant WHERE user_id = %s", (uid,))
-            for cid in body.get("clients") or []:
+            for cid in granted:
                 conn.execute("INSERT INTO client_grant (user_id, client_id, granted_by) VALUES (%s, %s, %s)",
                              (uid, int(cid), actor["id"]))
         after_u = db.one(conn, "SELECT * FROM app_user WHERE id = %s", (uid,))

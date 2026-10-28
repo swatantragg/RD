@@ -3,26 +3,22 @@ Thin: every route calls one service function, which checks the role, scopes the 
 from __future__ import annotations
 
 import datetime as dt
-import urllib.parse
 
-from fastapi import APIRouter, Body, Depends, File, Form, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import Response
 from starlette.concurrency import run_in_threadpool
 
 from .. import config
-from ..rd import access, catalogue, enquiries, library, master, recon
+from ..rd import access, catalogue, enquiries, library, master, notify, recon
 from ..rd.service import RDError
-from .deps import J, actor
+from .deps import J, actor, attachment, id_list, json_body, json_body_opt, need_id
 
 router = APIRouter()
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 def _attachment(name: str, data: bytes, media: str = XLSX) -> Response:
-    return Response(data, media_type=media, headers={
-        "Content-Disposition": f"attachment; filename=\"{name.encode('ascii', 'replace').decode()}\"; "
-                               f"filename*=UTF-8''{urllib.parse.quote(name)}",
-        "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"})
+    return attachment(name, data, media)
 
 
 async def _read(f: UploadFile) -> tuple[str, bytes]:
@@ -46,13 +42,13 @@ def works(client_id: int, q: str | None = None, status: str | None = None, mappi
 
 
 @router.post("/catalogue/works")
-def create_work(body: dict = Body(...), a: dict = Depends(actor)):
-    return J(catalogue.create_work(a, int(body["client_id"]), body))
+def create_work(body: dict = Depends(json_body), a: dict = Depends(actor)):
+    return J(catalogue.create_work(a, need_id(body, "client_id", "client"), body))
 
 
 @router.post("/catalogue/link-isrc")
-def link_isrc(body: dict = Body(...), a: dict = Depends(actor)):
-    return J(catalogue.link_by_number(a, int(body["client_id"]), body))
+def link_isrc(body: dict = Depends(json_body), a: dict = Depends(actor)):
+    return J(catalogue.link_by_number(a, need_id(body, "client_id", "client"), body))
 
 
 @router.get("/catalogue/works/search")
@@ -66,22 +62,22 @@ def work(wid: int, a: dict = Depends(actor)):
 
 
 @router.patch("/catalogue/works/{wid}")
-def update_work(wid: int, body: dict = Body(...), a: dict = Depends(actor)):
+def update_work(wid: int, body: dict = Depends(json_body), a: dict = Depends(actor)):
     return J(catalogue.update_work(a, wid, body))
 
 
 @router.post("/catalogue/works/{wid}/links")
-def add_link(wid: int, body: dict = Body(...), a: dict = Depends(actor)):
+def add_link(wid: int, body: dict = Depends(json_body), a: dict = Depends(actor)):
     return J(catalogue.add_link(a, wid, body))
 
 
 @router.post("/catalogue/links/{mid}/status")
-def link_status(mid: int, body: dict = Body(...), a: dict = Depends(actor)):
+def link_status(mid: int, body: dict = Depends(json_body), a: dict = Depends(actor)):
     return J(catalogue.set_link_status(a, mid, body.get("status") or "", body.get("note")))
 
 
 @router.post("/catalogue/links/{mid}/move")
-def move_link(mid: int, body: dict = Body(...), a: dict = Depends(actor)):
+def move_link(mid: int, body: dict = Depends(json_body), a: dict = Depends(actor)):
     return J(catalogue.move_link(a, mid, body.get("to_work") or "", body.get("note")))
 
 
@@ -113,8 +109,8 @@ async def start_import(client_id: int = Form(...), file: UploadFile = File(...),
 
 
 @router.post("/catalogue/imports/from-file")
-def import_stored(body: dict = Body(...), a: dict = Depends(actor)):
-    return J(catalogue.import_stored(a, int(body["client_id"]), int(body["file_id"])))
+def import_stored(body: dict = Depends(json_body), a: dict = Depends(actor)):
+    return J(catalogue.import_stored(a, need_id(body, "client_id", "client"), need_id(body, "file_id", "file")))
 
 
 @router.get("/catalogue/imports/{iid}")
@@ -124,8 +120,9 @@ def import_view(iid: int, status: str | None = None, action: str | None = None, 
 
 
 @router.post("/catalogue/imports/{iid}/apply")
-def apply_import(iid: int, body: dict = Body(default={}), a: dict = Depends(actor)):
-    return J(catalogue.apply_import(a, iid, verify=bool(body.get("verify_mappings", True))))
+def apply_import(iid: int, body: dict = Depends(json_body_opt), a: dict = Depends(actor)):
+    return J(catalogue.apply_import(a, iid, verify=body.get("verify_mappings", True) is True,
+                                    received_via=body.get("received_via"), received_from=body.get("received_from")))
 
 
 @router.post("/catalogue/imports/{iid}/discard")
@@ -180,12 +177,12 @@ def statement(sid: int, a: dict = Depends(actor)):
 
 
 @router.post("/statements/{sid}/answer")
-def answer(sid: int, body: dict = Body(...), a: dict = Depends(actor)):
+def answer(sid: int, body: dict = Depends(json_body), a: dict = Depends(actor)):
     return J(library.answer(a, sid, body.get("answers") or {}))
 
 
 @router.patch("/statements/{sid}")
-def update_statement(sid: int, body: dict = Body(...), a: dict = Depends(actor)):
+def update_statement(sid: int, body: dict = Depends(json_body), a: dict = Depends(actor)):
     return J(library.update(a, sid, body))
 
 
@@ -297,13 +294,13 @@ def recon_settings(client_id: int, a: dict = Depends(actor)):
 
 
 @router.post("/reconciliation/settings")
-def save_recon_settings(body: dict = Body(...), a: dict = Depends(actor)):
-    return J(recon.save_settings(a, int(body["client_id"]), body))
+def save_recon_settings(body: dict = Depends(json_body), a: dict = Depends(actor)):
+    return J(recon.save_settings(a, need_id(body, "client_id", "client"), body))
 
 
 @router.post("/reconciliation/settings/platforms")
-def save_recon_platform_settings(body: dict = Body(...), a: dict = Depends(actor)):
-    return J(recon.save_platform_settings(a, int(body["client_id"]), body))
+def save_recon_platform_settings(body: dict = Depends(json_body), a: dict = Depends(actor)):
+    return J(recon.save_platform_settings(a, need_id(body, "client_id", "client"), body))
 
 
 @router.get("/reconciliation/runs")
@@ -312,8 +309,9 @@ def recon_runs(client_id: int, a: dict = Depends(actor)):
 
 
 @router.post("/reconciliation/runs")
-async def start_recon(body: dict = Body(...), a: dict = Depends(actor)):
-    return J(await run_in_threadpool(recon.start_run, a, int(body["client_id"]), int(body.get("platform_id") or 0),
+async def start_recon(body: dict = Depends(json_body), a: dict = Depends(actor)):
+    return J(await run_in_threadpool(recon.start_run, a, need_id(body, "client_id", "client"),
+                                     need_id(body, "platform_id", "platform"),
                                      body.get("period_from"), body.get("period_to"),
                                      "YEAR" if body.get("mode") == "YEAR" else "PERIOD", body.get("fy")))
 
@@ -323,32 +321,35 @@ def recon_run(rid: int, a: dict = Depends(actor)):
     return J(recon.run_view(a, rid))
 
 
-def _rf(kind, calc, mapping, review, exception, q, sort, open_, variance) -> dict:
+def _rf(kind, calc, mapping, review, exception, q, sort, open_, variance, view=None) -> dict:
+    """The run's item filters; view 'usage' = the Usage tab (the months with platform usage only)."""
     return dict(kind=kind, calc=calc, mapping=mapping, review=review, exception=exception, q=q, sort=sort, open=open_,
-                variance=variance)
+                variance=variance, view=view if view == "usage" else None)
 
 
 @router.get("/reconciliation/runs/{rid}/item-ids")
 def recon_item_ids(rid: int, kind: str | None = None, calc: str | None = None, mapping: str | None = None,
                    review: str | None = None, exception: str | None = None, q: str | None = None,
-                   open: bool = False, variance: str | None = None, a: dict = Depends(actor)):  # noqa: A002
-    return J(recon.item_ids(a, rid, _rf(kind, calc, mapping, review, exception, q, None, open, variance)))
+                   open: bool = False, variance: str | None = None, view: str | None = None,  # noqa: A002
+                   a: dict = Depends(actor)):
+    return J(recon.item_ids(a, rid, _rf(kind, calc, mapping, review, exception, q, None, open, variance, view)))
 
 
 @router.get("/reconciliation/runs/{rid}/items")
 def recon_items(rid: int, kind: str | None = None, calc: str | None = None, mapping: str | None = None,
                 review: str | None = None, exception: str | None = None, q: str | None = None,
                 sort: str | None = None, open: bool = False, variance: str | None = None, offset: int = 0,  # noqa: A002
-                a: dict = Depends(actor)):
-    return J(recon.items(a, rid, _rf(kind, calc, mapping, review, exception, q, sort, open, variance), offset))
+                view: str | None = None, a: dict = Depends(actor)):
+    return J(recon.items(a, rid, _rf(kind, calc, mapping, review, exception, q, sort, open, variance, view), offset))
 
 
 @router.get("/reconciliation/runs/{rid}/report")
 def recon_report(rid: int, kind: str | None = None, calc: str | None = None, mapping: str | None = None,
                  review: str | None = None, exception: str | None = None, q: str | None = None,
-                 open: bool = False, variance: str | None = None, sort: str | None = None,
+                 open: bool = False, variance: str | None = None, sort: str | None = None, view: str | None = None,
                  a: dict = Depends(actor)):  # noqa: A002
-    return _attachment(*recon.report(a, rid, _rf(kind, calc, mapping, review, exception, q, sort, open, variance)))
+    return _attachment(*recon.report(a, rid, _rf(kind, calc, mapping, review, exception, q, sort, open, variance,
+                                                 view)))
 
 
 @router.get("/reconciliation/items/{iid}")
@@ -357,22 +358,27 @@ def recon_item(iid: int, a: dict = Depends(actor)):
 
 
 @router.post("/reconciliation/runs/{rid}/review")
-def review_items(rid: int, body: dict = Body(...), a: dict = Depends(actor)):
+def review_items(rid: int, body: dict = Depends(json_body), a: dict = Depends(actor)):
     return J(recon.review_items(a, rid, body.get("item_ids") or [], body.get("status") or "", body.get("note")))
 
 
+@router.post("/reconciliation/runs/{rid}/verify")
+def verify_run(rid: int, body: dict = Depends(json_body_opt), a: dict = Depends(actor)):
+    return J(recon.verify_run(a, rid, body.get("note")))
+
+
 @router.post("/reconciliation/items/{iid}/review")
-def review_item(iid: int, body: dict = Body(...), a: dict = Depends(actor)):
+def review_item(iid: int, body: dict = Depends(json_body), a: dict = Depends(actor)):
     return J(recon.review_item(a, iid, body.get("status") or "", body.get("note")))
 
 
 @router.post("/reconciliation/items/{iid}/addressed")
-def item_addressed(iid: int, body: dict = Body(...), a: dict = Depends(actor)):
+def item_addressed(iid: int, body: dict = Depends(json_body), a: dict = Depends(actor)):
     return J(recon.mark_addressed(a, iid, body))
 
 
 @router.post("/reconciliation/exceptions/{eid}")
-def update_exception(eid: int, body: dict = Body(...), a: dict = Depends(actor)):
+def update_exception(eid: int, body: dict = Depends(json_body), a: dict = Depends(actor)):
     return J(recon.update_exception(a, eid, body))
 
 
@@ -385,15 +391,15 @@ def enquiry_dashboard(client_id: int, a: dict = Depends(actor)):
 @router.get("/enquiries")
 def enquiry_list(client_id: int, status: str | None = None, q: str | None = None, mine: bool = False,
                  queue: str | None = Query(None), a: dict = Depends(actor)):
-    if queue and queue not in enquiries.QUEUES:
+    if queue and queue not in enquiries.QUEUES and queue not in enquiries.SECTIONS:
         raise RDError("Unknown list.")
     return J(enquiries.listing(a, client_id, status or None, q or None, mine, queue or None))
 
 
 @router.post("/enquiries")
-def create_enquiry(body: dict = Body(...), a: dict = Depends(actor)):
-    return J(enquiries.create(a, int(body["client_id"]), int(body["run_id"]), [int(x) for x in body.get("item_ids") or []],
-                              bool(body.get("later_reviewed")), body.get("assigned_to")))
+def create_enquiry(body: dict = Depends(json_body), a: dict = Depends(actor)):
+    return J(enquiries.create(a, need_id(body, "client_id", "client"), need_id(body, "run_id", "reconciliation"), id_list(body, "item_ids", "items"),
+                              body.get("later_reviewed") is True, body.get("assigned_to")))
 
 
 @router.get("/enquiries/{eid}")
@@ -402,22 +408,22 @@ def enquiry(eid: int, a: dict = Depends(actor)):
 
 
 @router.patch("/enquiries/{eid}")
-def update_enquiry(eid: int, body: dict = Body(...), a: dict = Depends(actor)):
+def update_enquiry(eid: int, body: dict = Depends(json_body), a: dict = Depends(actor)):
     return J(enquiries.update_draft(a, eid, body))
 
 
 @router.post("/enquiries/{eid}/act")
-def enquiry_act(eid: int, body: dict = Body(...), a: dict = Depends(actor)):
+def enquiry_act(eid: int, body: dict = Depends(json_body), a: dict = Depends(actor)):
     return J(enquiries.act(a, eid, body.get("action") or "", body))
 
 
 @router.post("/enquiries/{eid}/actions")
-def add_follow_up(eid: int, body: dict = Body(...), a: dict = Depends(actor)):
+def add_follow_up(eid: int, body: dict = Depends(json_body), a: dict = Depends(actor)):
     return J(enquiries.add_action(a, eid, body))
 
 
 @router.patch("/enquiry-actions/{aid}")
-def update_follow_up(aid: int, body: dict = Body(...), a: dict = Depends(actor)):
+def update_follow_up(aid: int, body: dict = Depends(json_body), a: dict = Depends(actor)):
     return J(enquiries.update_action(a, aid, body))
 
 
@@ -429,6 +435,17 @@ def enquiry_attachment(eid: int, usage: bool = False, a: dict = Depends(actor)):
 @router.get("/enquiries/{eid}/annex")
 def enquiry_annex(eid: int, a: dict = Depends(actor)):
     return _attachment(*enquiries.annex(a, eid))
+
+
+# ------------------------------------------------------------------ pop-up notifications (work handed to the person)
+@router.get("/notifications")
+def notifications(a: dict = Depends(actor)):
+    return J(notify.unread(a))
+
+
+@router.post("/notifications/read")
+def notifications_read(body: dict = Depends(json_body_opt), a: dict = Depends(actor)):
+    return J(notify.mark_read(a, None if body.get("all") is True else id_list(body, "ids", "notifications")))
 
 
 # ------------------------------------------------------------------ home dashboard

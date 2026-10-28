@@ -28,7 +28,7 @@ export default function Master({ tab }: { tab?: string }) {
   const [f, setF] = useState<F>(MASTER_FILTERS);
   return (
     <NeedClient>{(cid) => (
-      <Page title="Master">
+      <Page title="Master" intro="Every work with its platform revenue, plays and what IPRS paid, for any period - the master statement to export.">
         <Card><ClientSelect label="Client" /></Card>
         <div className="tabs" role="tablist">
           {[["sheet", "Master sheet"], ["works", "Works by platform"], ["unmatched", "Unmatched money"]].map(([k, l]) => (

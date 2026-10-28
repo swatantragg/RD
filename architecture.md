@@ -2188,3 +2188,160 @@ The processing-run API stays in the backend, unused by the screens.
 'IPRS'`; `platforms` = imported `PLATFORM` statements per platform name. One box each (IPRS first, a platform only when
 it has reports); a box opens `#/statements/iprs` or `#/statements/platform`. The status counts and the recent-files
 list are gone from the card (`statements` by status stays in the payload for the hero's next step).
+
+## 37. Version 1.6.2: short check in the query attachment, check column names
+
+**Column names** (run page, reconciliation Excel report, both query attachments): `Revenue` / `Client share (52 %)` →
+**Client revenue** (the revenue the platform reported = the client's share); `Received % of total revenue` →
+**Received %**; `Variance % (7 % - received %)` → **Variance %**. The removed detail is in the column tooltips (screen)
+and in `check_note` (Excel notes). The run page keeps its Total revenue (100 %) and Expected value columns.
+
+**Short check in downloads** (`block_sheet(brief=True)`, `check_note(brief=True)`): the reconciliation's Excel report
+(`recon.report`) and the query attachment (`enquiries.attachment(usage=False)`) show Client revenue · Received from
+IPRS · Received % · Variance %; no Expected value, no Variance amount; the report's Summary sheet has no Expected
+royalty / Total shortfall lines. Only the run page and the attachment with usage (`?usage=true`) keep the full check
+(Client revenue · Expected value · Received from IPRS · Received % · Variance % · Variance amount). The letter (`_draft`) describes the attachment
+as "the % of the song's total revenue received with its difference from the expected 7 %"; saved letters change only
+with "Rebuild the text".
+
+## 38. Version 1.6.3: the Usage tab (the months with platform usage)
+
+**Usage months** (`recon.usage_months(run)`): the run's compared months ∩ `source_snapshot.usage_months` (the months
+with plays); none for runs before 1.5.0. `usage_info(run, blocks)` → months, label, `split_text` (IPRS statements
+that cover more months than these). No migration: everything is worked out from `reconciliation_sources`, so runs
+made before 1.6.3 get the tab too.
+
+**`usage_view(conn, run, items, blocks)`** → (items, blocks, values) in the shapes of `items()` / `run_blocks()` /
+`block_values()`. A work is listed when it has platform revenue in the usage months. Platform revenue and plays: the
+months themselves. IPRS (one amount per work per statement, no months): a statement inside the usage months counts in
+full; one that covers more months counts `amount × the song's revenue in (its months ∩ usage months) ÷ its revenue
+in its months` (the user's rule, 2026-10-26: IPRS gives one amount for Oct 2025 - Mar 2026, the Jan - Mar part
+follows the song's revenue). Total revenue and expected = the run's × (revenue in the usage months ÷ revenue in the
+run); received %, variance % and amount follow as in `compute()`. Year-before and client-statement columns are left
+out.
+
+**API**: `view=usage` on `GET /reconciliation/runs/{id}/items` (adds `blocks` + `usage` = `usage_totals()`),
+`/item-ids` and `/report` (`_rf`); filters as on the Works tab (kind forced to WORK), the Result filter and the sort
+applied in Python (`_usage_rows`, `USAGE_SORTS`). The report on the Usage tab: short check (as every download except
+the attachment with usage), Summary sheet with the usage-month figures, ISRC detail / Source lines without revenue and
+plays of other months, file `..._usage_YYYY-MM_to_YYYY-MM_...`. `run_view` adds `usage` and `available` (IPRS statement
+periods, months with revenue, usage months, what Works compares); `options()` adds per platform `available` (in words)
+and `revenue_month_list` / `usage_month_list`.
+
+**Enquiry attachment with usage** (`enquiries.attachment(usage=True)`): `usage_view` of the enquiry's items - the
+usage months only, full check, Usage + Revenue per usage (rates = usage plays and revenue of those months); songs with
+no revenue in them are left out and counted in the notes. Name `{ref}_{platform}_{usage start}_to_{usage end}_Songs_
+with_usage.xlsx`; `detail()` returns it (None when the run has no usage months) and `usage_months` (text).
+`recon.usage_rates` / `usage_label` (revenue per usage over part of the period) are gone.
+
+**Screens**: start page 'Available for <platform>' box + Works / Usage lines under the chosen months
+(`usage_month_list` ∩ the months); run page 'Available' facts + compare line; tabs Works · Usage · <months> ·
+Unmatched recordings · Works not in catalogue · All (`RUN_FILTERS.view`); Usage tab figures box (`UsageTotals`), its
+blocks from the items response; the item pop-up shows the usage-month figures above the run's own when opened from
+the Usage tab.
+
+## 39. Version 1.7.0: internal confirmation, IPRS / PRS reminders, a second person verifies
+
+**Migration 0014_internal_confirmation**: `enquiries.review_requested_from/_at` (the colleague it was forwarded to),
+`confirmation_method` (IN_APPLICATION, LIVE_DEMO, TEXT, PHONE, MEETING, OTHER), `confirmed_by_name`, `confirmed_at`,
+`confirmation_note` (earlier approvals backfilled as IN_APPLICATION); `reconciliation_runs.verified_by/_at`,
+`verify_note` with CHECK `verified_by <> started_by`; `catalogue_imports.received_via` (EMAIL, WHATSAPP, OTHER),
+`received_from`.
+
+**Enquiries, internal** (`enquiries.py`): `submit` = "Forward for confirmation" to any active person except the actor
+(required); the colleague gets the follow-up `Confirm the report for <ref>` (`REVIEW_TITLE`). `_may()` decides every
+step: the colleague it was forwarded to may `approve` / `return` whatever their role; the preparer never approves their
+own enquiry. `record_confirmation` (DRAFT_PREPARED or PENDING_APPROVAL → APPROVED_TO_SEND, capability prepare): method,
+who (a person or a typed name, not the actor), date and time (ISO with offset, not in the future); approved_by = the
+person who recorded it (the CHECK on APPROVED_TO_SEND). `internal_note` = an INTERNAL_NOTE event, no status change.
+`detail()` adds `internal` (prepared / forwarded / confirmed, how, by whom, when), `can_copy` (confirmed: the screen's
+Copy text), `reminders`, `confirm_methods`, and per event `label` (`EVENT_LABEL`) and `phase` (external from the first
+MANUALLY_SENT event on).
+
+**Enquiries, external**: `record_sent` schedules `Reminder 1 of 3` (sent + 7 days, `_reminder`); each `record_follow_up`
+closes the open reminder and schedules the next; after 3 the 4th is `call IPRS (verbal) and escalate to the IPRS CEO`.
+`record_response` cancels the open reminders.
+
+**Lists**: `SECTIONS` internal (`INTERNAL` = drafting + PENDING_APPROVAL + APPROVED_TO_SEND) / external (`EXTERNAL` =
+sent, not closed) as `queue` on `GET /enquiries` (the Enquiries tabs); `waiting()` → Home's two lists with `stage`,
+next follow-up, last internal note / last reply. `overview` adds `waiting` and `catalogue_received` (the last 4
+applied imports: file, applied_at, received_via/from).
+
+**Reconciliation**: `POST /reconciliation/runs/{id}/verify` (`recon.verify_run`, audit `recon.run_verified`); `runs()`
+adds `review.by` (reviewers' names), `verified_by/_at`; `run_view` adds `verification` (ran by, verified by, can_verify)
+and `reviewed.by`; `items()` adds `reviewed_by_name`. Review column: "Not reviewed" or the names.
+
+**Catalogue**: `apply_import(received_via, received_from)` - received_via is required; in the audit detail and
+`import_view` / `imports()`.
+
+**Screens**: Home greeting + territory line (`.basis`), one-line `sub` on every Home card and `intro` on every page
+(Catalogue per tab, `TAB_NOTE`), the run's item tabs (`.tab-note`: Durga verification for unmatched recordings and
+works not in the catalogue, the Usage tab's 3 / 6 months); Settings → Activity log shows `ACTION_LABEL` in words.
+
+## 40. Version 1.7.1: queries list the matched works, pop-up notifications, 'Check the links again' answers
+
+**Query works** (user's rule 2026-10-28): a query to IPRS lists every work of the run's Works tab that is properly
+matched - whatever its result (underpaid, missing at IPRS, paid in full, no platform revenue to compare). Unmatched
+recordings and works not in the catalogue never go. `recon.held_back(conn, client_id, items)` judges "properly matched"
+on the catalogue as it is now (not the run's snapshot): an ISRC behind the work's revenue / usage whose
+`isrc_resolution.mapping_status` is not VERIFIED (`HELD_LINK`), or a work with `catalogue_status` REVIEW / TO_REGISTER
+(`HELD_WORK`). `why_not_query(it, held)` = not a WORK, or held. `item_ids` returns `held` (left out, not yet enquired)
+and `enquired`; `items()` adds `held` per row (the screen's `eligible()`); `enquiries.create` refuses held works. A
+query therefore starts at DRAFT_PREPARED; `_status_for` still guards it (links can change after the draft). Live
+SVF-REC-0003: 1,589 works, 34 held, so a fresh query has 1,555.
+
+**Notifications**: migration 0015 `notifications` (client-scoped RLS; user_id, kind, title, body, link, created_by,
+read_at). `rd/notify.py` `send()` (never to the actor), `unread()`, `mark_read(ids | all)`; `GET /notifications`,
+`POST /notifications/read {ids} | {all: true}`. Sent on: enquiry created with / assigned to someone (ENQUIRY_ASSIGNED),
+forwarded for confirmation (CONFIRM_REPORT), returned / confirmed in the application (REPORT_RETURNED /
+REPORT_CONFIRMED, to the preparer), follow-up added or reassigned (FOLLOW_UP_ASSIGNED), reconciliation exception
+assigned (EXCEPTION_ASSIGNED). Screen: `Notifications.tsx` in the shell polls every 30 s; up to 3 pop-ups top right
+under the top bar (Open = mark read, switch client, go to the link; × = mark read; "Dismiss all"), folded after 20 s
+into a "N new" button.
+
+**Enquiry page**: `detail()` adds `hold` (what holds a drafting enquiry back now, with counts: "19 ISRC links not
+verified (...) and 31 works to review (...)"). 'Check the links again' toasts "All links are verified..." or "Still
+waiting for link verification. <hold>" (it said "Done." whatever happened) and adds no history line when nothing
+changed. One-liners: `FOLLOW_UP_LINE` (Follow-ups card + Add a follow-up) and `NOTE_LINE` (Internal card + Send a note).
+
+## 41. Version 1.7.2: Home enquiry lanes, logs read who - what - when
+
+**Home → Enquiries waiting** (the user found the two lists hard to tell apart): `Lane` in `pages/Home.tsx`, two lanes
+in `.lanes` (auto-fit, side by side, stacked when narrow). 1 Internal (amber, `--warn*`): "Not sent yet ·
+confirmation inside the company", steps Prepared → Forwarded → Confirmed → Sent. 2 External (teal, new tokens
+`--sent`, `--sent-ink`, `--sent-wash`, `--sent-on` in light and both dark blocks): "Sent · waiting for IPRS / PRS to
+reply", steps Sent → Reminder 1 → 2 → 3 → Call to the IPRS CEO. Each enquiry: reference + status / "Your turn", a
+step bar (`stepsDone`: internal from the status, external 1 + reminders sent) with "Step k of n", the stage text from
+`enquiries.waiting()`, the next follow-up and the last note. No backend change.
+
+**Logs**: `Log` in `pages/Enquiries.tsx` keeps the time line (`ul.timeline`, line and dots - the user asked to keep it)
+with each line in grid columns Who · What · Date and time under a header row (`.log`, `.log-row`): who = a name tag with
+initials (`.who-tag`), one colour per person in the order they first appear on the enquiry (`tintsOf`, preparer
+first; tokens accent / sent / warn); on a phone name and time, then what. Used for the enquiry's notes (Internal card)
+and its Activity log (both phases). Settings → Activity log columns are Who · What · Details · Date and time.
+
+## 42. Version 1.7.3: security and quality audit
+
+**Tests** (kept outside the repo, as the user removed the in-repo tests on 2026-10-10):
+`/home/swatantra/RD/backups/2026-10-28-security-tests/` - `runtests.sh` runs pytest in an image built from
+`Dockerfile.test` (mrm-api + pytest + httpx) against a copy of live (`mrm_t173` in mrm-devdb), in-process with
+FastAPI's TestClient. 130 tests: unit (passwords, roles, file store, upload checks, export cells, download header,
+numbers, the query rule, production settings), integration (sign-in, sessions, CSRF, password rules, switch-off,
+role matrix, client isolation by list and by id, writes on another client's records, notifications, database RLS
+and app-role limits), workflow controls (held works, duplicates, own confirmation, nothing sent unconfirmed,
+assignment to missing / switched-off people, link verification by role, frozen runs, append-only audit chain, no
+secrets in the audit), hostile uploads, and a fuzz of all 112 routes x 3 accounts x bad ids / bodies / queries
+(about 4,700 requests; no 5xx, no SQL / stack text in responses). npm audit and pip-audit: no known vulnerabilities.
+
+**Fixes**: `deps.json_body` / `json_body_opt` (every JSON route: text fields coerced, so a list or object where text
+is expected is a 400), `deps.need_id` / `id_list` (required ids and id lists), `deps.attachment` (one download
+helper; file name stripped of control characters, quotes, backslashes and semicolons), `excel.put` drops
+`ILLEGAL_CHARACTERS_RE`, `security.PASSWORD_MAX` 128 and a `check_password` that never raises (damaged hash, foreign
+cost parameters), routes_auth `_text` for password fields, `access.assignee` (active account or a 400) used by
+enquiry create / assign / follow-ups and exception assignment, `people._clients` (existing clients, once), strict
+booleans (`is True`, or a 400) for account / client `active`, `later_reviewed`, `verify_mappings`, `verify`;
+`apply_import` verifies links only for `verify_mappings` (Admins; the checkbox is hidden for Users);
+InsufficientPrivilege from PostgreSQL itself (permission denied / row-level security) answers 403 "You do not have
+access to this."; CSRF compared with `hmac.compare_digest`; nginx sends `X-Forwarded-For $remote_addr`.
+
+**Release notes** can have `sections` ({title, points}) shown under headings (`WhatsNew.tsx`, `.wn-section`).

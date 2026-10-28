@@ -83,7 +83,7 @@ function Library({ cid, tab }: { cid: number; tab?: string }) {
   const set = (k: string, v: string) => { setF({ ...f, [k]: v }); setOffset(0); };
   const isrc = t.source === "PLATFORM";
   return (
-    <Page title="Statements"
+    <Page title="Statements" intro="Upload what came in: the platforms' revenue and usage reports, and the IPRS statements. Each file is checked and counted once."
           actions={me.can.clear_statements && <Button kind="danger" onClick={() => setClearing(true)}>Delete all statements</Button>}>
       {clearing && <ClearDialog cid={cid} kind="statements" onClose={() => setClearing(false)} onDone={() => setQueue([])} />}
       <div className="tabs" role="tablist">

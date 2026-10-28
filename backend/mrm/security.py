@@ -13,6 +13,7 @@ from . import config, db
 
 ROLES = ("SUPER_ADMIN", "ADMIN", "USER")              # exactly three application roles (app_user.role)
 PASSWORD_MIN = 10
+PASSWORD_MAX = 128                                   # longer input is refused before hashing
 
 
 class Forbidden(Exception):
@@ -26,18 +27,30 @@ _N, _R, _P = 2 ** 14, 8, 1
 def hash_password(password: str) -> str:
     if len(password) < PASSWORD_MIN:
         raise ValueError(f"passwords need at least {PASSWORD_MIN} characters")
+    if len(password) > PASSWORD_MAX:
+        raise ValueError(f"passwords can have at most {PASSWORD_MAX} characters")
     salt = secrets.token_bytes(16)
     dk = hashlib.scrypt(password.encode(), salt=salt, n=_N, r=_R, p=_P, dklen=32)
     return f"scrypt${_N}${_R}${_P}${base64.b64encode(salt).decode()}${base64.b64encode(dk).decode()}"
 
 
+def _dummy() -> bool:
+    hashlib.scrypt(b"x", salt=b"0" * 16, n=_N, r=_R, p=_P, dklen=32)         # the same cost either way
+    return False
+
+
 def check_password(password: str, stored: str | None) -> bool:
-    if not stored or not stored.startswith("scrypt$"):
-        hashlib.scrypt(b"x", salt=b"0" * 16, n=_N, r=_R, p=_P, dklen=32)     # same cost either way
-        return False
-    _, n, r, p, salt, dk = stored.split("$")
-    got = hashlib.scrypt(password.encode(), salt=base64.b64decode(salt), n=int(n), r=int(r), p=int(p), dklen=32)
-    return hmac.compare_digest(got, base64.b64decode(dk))
+    """False for a wrong password, an over-long one, or a stored hash that is missing or damaged - never an error."""
+    if not stored or not stored.startswith("scrypt$") or len(password) > PASSWORD_MAX:
+        return _dummy()
+    try:
+        _, n, r, p, salt, dk = stored.split("$")
+        if (int(n), int(r), int(p)) != (_N, _R, _P):          # only our own cost: a forged hash cannot ask for more
+            return _dummy()
+        got = hashlib.scrypt(password.encode(), salt=base64.b64decode(salt, validate=True), n=_N, r=_R, p=_P, dklen=32)
+        return hmac.compare_digest(got, base64.b64decode(dk, validate=True))
+    except (ValueError, TypeError):
+        return _dummy()
 
 
 # ------------------------------------------------------------------ sessions (server side)

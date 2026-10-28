@@ -41,7 +41,9 @@ export function ReleaseNotes({ releases, current, onClose }: { releases: Release
           <section key={r.version} className="wn-release">
             {releases.length > 1 && <h3>V{r.version} <span className="muted small">· {r.date}{i === 0 && current === r.version ? " · current" : ""}</span></h3>}
             <p className={i === 0 ? "wn-summary" : ""}>{r.summary}</p>
-            <ul>{r.points.map((p, k) => <li key={k}>{p}</li>)}</ul>
+            {r.points.length > 0 && <ul>{r.points.map((p, k) => <li key={k}>{p}</li>)}</ul>}
+            {(r.sections ?? []).map((sec) => (
+              <div key={sec.title} className="wn-section"><h4>{sec.title}</h4><ul>{sec.points.map((p, k) => <li key={k}>{p}</li>)}</ul></div>))}
           </section>
         ))}
         <div className="actions end"><Button kind="primary" onClick={onClose}>Got it</Button></div>

@@ -1,16 +1,15 @@
 """The royalty processing platform: home, clients, processing runs, files, results, review, publishing, downloads."""
 from __future__ import annotations
 
-import urllib.parse
 
-from fastapi import APIRouter, Body, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, UploadFile
 from fastapi.responses import Response
 from starlette.concurrency import run_in_threadpool
 
 from .. import config
 from ..normalize import s
 from ..rd import access, service
-from .deps import J, actor
+from .deps import J, actor, attachment, id_list, json_body, need_id
 
 router = APIRouter()
 
@@ -33,12 +32,12 @@ def clients(a: dict = Depends(actor)):
 
 
 @router.post("/clients")
-def create_client(body: dict = Body(...), a: dict = Depends(actor)):
+def create_client(body: dict = Depends(json_body), a: dict = Depends(actor)):
     return J(service.save_client(a, body))
 
 
 @router.patch("/clients/{cid}")
-def update_client(cid: int, body: dict = Body(...), a: dict = Depends(actor)):
+def update_client(cid: int, body: dict = Depends(json_body), a: dict = Depends(actor)):
     return J(service.save_client(a, body, cid))
 
 
@@ -49,8 +48,8 @@ def runs(client_id: int | None = None, a: dict = Depends(actor)):
 
 
 @router.post("/runs")
-def create_run(body: dict = Body(...), a: dict = Depends(actor)):
-    return J(service.create_run(a, int(body["client_id"]), body.get("title")))
+def create_run(body: dict = Depends(json_body), a: dict = Depends(actor)):
+    return J(service.create_run(a, need_id(body, "client_id", "client"), body.get("title")))
 
 
 @router.get("/runs/{rid}")
@@ -88,12 +87,12 @@ async def upload(rid: int, files: list[UploadFile] = File(...), a: dict = Depend
 
 
 @router.post("/runs/{rid}/files/{fid}/answer")
-def answer(rid: int, fid: int, body: dict = Body(...), a: dict = Depends(actor)):
+def answer(rid: int, fid: int, body: dict = Depends(json_body), a: dict = Depends(actor)):
     return J(service.answer(a, rid, fid, body.get("answers") or {}))
 
 
 @router.post("/runs/{rid}/files/{fid}/choice")
-def choice(rid: int, fid: int, body: dict = Body(...), a: dict = Depends(actor)):
+def choice(rid: int, fid: int, body: dict = Depends(json_body), a: dict = Depends(actor)):
     service.choose(a, rid, fid, s(body.get("choice")))
     return J(service.run_view(a, rid))
 
@@ -126,13 +125,13 @@ def findings(bid: int, status: str | None = None, q: str | None = None, offset: 
 
 
 @router.post("/builds/{bid}/issues/{no}/act")
-def act(bid: int, no: int, body: dict = Body(...), a: dict = Depends(actor)):
+def act(bid: int, no: int, body: dict = Depends(json_body), a: dict = Depends(actor)):
     return J(service.act(a, bid, no, s(body.get("action")), body))
 
 
 @router.post("/builds/{bid}/findings/status")
-def set_status(bid: int, body: dict = Body(...), a: dict = Depends(actor)):
-    return J(service.set_status(a, bid, [int(x) for x in body.get("findings") or []], s(body.get("status")),
+def set_status(bid: int, body: dict = Depends(json_body), a: dict = Depends(actor)):
+    return J(service.set_status(a, bid, id_list(body, "findings", "findings"), s(body.get("status")),
                                 body.get("note")))
 
 
@@ -142,11 +141,7 @@ def publish(bid: int, a: dict = Depends(actor)):
 
 
 def _attachment(name: str, data: bytes, media: str) -> Response:
-    quoted = urllib.parse.quote(name)
-    return Response(data, media_type=media, headers={
-        "Content-Disposition": f"attachment; filename=\"{name.encode('ascii', 'replace').decode()}\"; "
-                               f"filename*=UTF-8''{quoted}",
-        "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"})
+    return attachment(name, data, media)
 
 
 @router.get("/reports/{rid}/download")

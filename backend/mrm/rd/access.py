@@ -101,3 +101,17 @@ def tx(actor: dict | None, client_id: int | None = None) -> Iterator:
 def require_client(conn, actor: dict, client_id: int) -> None:
     if client_id not in client_ids(conn, actor):
         raise Forbidden("you do not have access to this client")
+
+
+def assignee(conn, user_id) -> int | None:
+    """The person work is given to: an active account (None = nobody). A missing or switched-off account is refused
+    with a plain message - work never goes to someone who cannot sign in."""
+    if user_id in (None, ""):
+        return None
+    try:
+        uid = int(user_id)
+    except (TypeError, ValueError):
+        raise ValueError("Choose a person from the list.") from None
+    if not db.scalar(conn, "SELECT id FROM app_user WHERE id = %s AND active AND deleted_at IS NULL", (uid,)):
+        raise ValueError("Choose an active person: this account does not exist or is switched off.")
+    return uid
